@@ -69,6 +69,12 @@ pub fn evaluate_quality(
         &deg_normalized, sample_rate, frame_size, hop_size, NUM_BANDS, 
     );
     
+    // 调试输出
+    eprintln!("[DEBUG] ref_spectro: {} bands x {} frames", ref_spectro.len(), 
+        if !ref_spectro.is_empty() { ref_spectro[0].len() } else { 0 });
+    eprintln!("[DEBUG] deg_spectro: {} bands x {} frames", deg_spectro.len(),
+        if !deg_spectro.is_empty() { deg_spectro[0].len() } else { 0 });
+    
     // 检查数据有效性
     if ref_spectro.is_empty() || deg_spectro.is_empty() || 
        ref_spectro[0].len() < PATCH_SIZE_FRAMES || deg_spectro[0].len() < PATCH_SIZE_FRAMES {
@@ -91,6 +97,11 @@ pub fn evaluate_quality(
     // ViSQOL: frame_duration = window_size * overlap (帧移)
     // 80ms 窗口, 25% 重叠 → 20ms 帧移
     let frame_duration = FRAME_DURATION_MS / 1000.0 * FRAME_OVERLAP;
+    eprintln!("[DEBUG] frame_duration: {}s, patch_size: {} frames (patch_duration={:?}s)", 
+        frame_duration, PATCH_SIZE_FRAMES, frame_duration * PATCH_SIZE_FRAMES as f64);
+    
+    // 调试输出patch匹配信息
+    eprintln!("[DEBUG] === Patch Matching Info ===");
     
     // 使用 DTW 滑动搜索找最优匹配（与 ViSQOL FindMostOptimalDegPatches 一致）
     let patch_matches = simple_sliding_search(
@@ -101,6 +112,12 @@ pub fn evaluate_quality(
         frame_duration,
         SEARCH_WINDOW_RADIUS,
     );
+    
+    eprintln!("[DEBUG] Found {} patch matches", patch_matches.len());
+    for (i, m) in patch_matches.iter().enumerate() {
+        eprintln!("[DEBUG]   Patch {}: ref=[{:?}-{:?}s] deg=[{:?}-{:?}s] sim={:?}",
+            i, m.ref_start_time, m.ref_end_time, m.deg_start_time, m.deg_end_time, m.similarity);
+    }
     
     // 对每个匹配计算详细的 NSIM 结果
     let nsim_results: Vec<NsimPatchResult> = patch_matches.iter().map(|m| {
@@ -129,7 +146,10 @@ pub fn evaluate_quality(
     } else { 0.0 };
     
     // MOS 预测
+    eprintln!("[DEBUG] MOS prediction: vnsim={:?}, fvnsim[0..3]={:?}, fvnsim10[0..3]={:?}",
+        vnsim, &fvnsim[..3.min(fvnsim.len())], &fvnsim10[..3.min(fvnsim10.len())]);
     let moslqo = predict_mos(&fvnsim, &fvnsim10, &fstdnsim, &fvdegenergy, vnsim);
+    eprintln!("[DEBUG] Final MOS-LQO: {:?}", moslqo);
     
     // 构建 patch 结果
     let patch_sims: Vec<PatchSimilarityResult> = nsim_results.iter().map(|r| {
