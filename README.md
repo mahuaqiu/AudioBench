@@ -1,99 +1,71 @@
-# AudioBench - 会议音频质量评估工具
+# AudioBench - 音频质量评估工具
 
 ## 概述
 
-这是一个用于评估会议音频质量的命令行工具。它通过对比参考音频（原始音频）和录制音频（会议软件录制），分析音频质量并生成评估报告。
+纯 Rust 实现的音频质量评估命令行工具，单 EXE 运行，无需外部依赖。
+通过对比参考音频和录制音频，输出 ViSQOL 兼容的音质指标。
 
 ## 功能特性
 
-- **信号对齐**: 使用 FFT 互相关算法自动对齐参考音频和录制音频
-- **ViSQOL 评分**: 集成 Google ViSQOL 音频质量评估算法，输出 MOS-LQO 分数
-- **详细指标**:
-  - MOS-LQO 分数（1-5 分）
-  - VNSIM（神经元网络相似度）
-  - 频段相似度分析（低频/高频）
-  - SNR（信噪比）
-  - 卡顿/丢包检测
-  - 幅值统计（RMS、峰值、削波检测）
-  - 问题诊断（背景噪声、高频损失、间歇性杂音）
+- **信号对齐**: FFT 互相关 + 归一化相关系数，分段局部对齐
+- **ViSQOL 兼容指标**: MOS-LQO、VNSIM、fVNSIM、频段分析
+- **纯 Rust 实现**: 无外部依赖，约 1.5MB
+- **分段评估**: 录制长于参考时，每段独立对齐评分
 
 ## 使用方法
 
 ### 命令行参数
 
 ```
-audio_bench --reference <参考音频> --recorded <录制音频> --visqol <ViSQOL目录> [选项]
+audio_bench -r <参考音频> -c <录制音频> [选项]
 ```
 
-#### 必需参数
+### 参数说明
 
-- `-r, --reference <文件>` - 参考音频文件（WAV 格式）
-- `-c, --recorded <文件>` - 录制音频文件（WAV 格式）
-- `-v, --visqol <目录>` - ViSQOL 可执行文件所在目录
-
-#### 可选参数
-
-- `-s, --sample-rate <采样率>` - 目标采样率（默认 48000，语音模式用 16000）
-- `--speech` - 使用语音模式（16kHz，推荐会议音频使用）
-- `-o, --output <文件>` - 输出 JSON 报告文件路径
-- `--keep-temp` - 保留临时文件（用于调试）
+| 参数 | 说明 |
+|------|------|
+| `-r, --reference` | 参考音频文件（WAV） |
+| `-c, --recorded` | 录制音频文件（WAV） |
+| `-s, --sample-rate` | 目标采样率（默认 48000） |
+| `--speech` | 语音模式（16kHz，最高频率 8kHz） |
+| `-o, --output` | 输出 JSON 报告 |
 
 ### 示例
 
 ```bash
-# 使用语音模式（推荐会议音频）
-./audio_bench --reference ref.wav --recorded rec.wav --visqol ./visqol-bin --speech
+# 语音模式
+./audio_bench -r ref.wav -c rec.wav --speech
 
-# 使用音频模式
-./audio_bench --reference ref.wav --recorded rec.wav --visqol ./visqol-bin -o report.json
+# 音频模式
+./audio_bench -r ref.wav -c rec.wav -o report.json
 ```
 
-## 输出示例
+## 输出指标
 
-```
-============================================================
-                    音频质量评估报告
-============================================================
+- **MOS-LQO**: 预测 Mean Opinion Score (1-5)
+- **VNSIM**: 全局 NSIM 相似度
+- **fVNSIM**: 各频段相似度
+- **fVDegEnergy**: 各频段降质能量比
+- **SNR**: 信噪比
+- **卡顿检测**: 丢包/静音事件统计
+- **诊断**: 背景噪声、高频损失、间歇杂音
 
-【总体质量】 良好
-  - MOS-LQO 分数: 4.12/5.0
-  - VNSIM 相似度: 0.9234
-
-【时间对齐】
-  - 传输延迟: 125.3 ms
-  - 对齐置信度: 98.5%
-
-【信噪比】
-  - SNR: 32.5 dB
-
-【卡顿/丢包检测】
-  - 卡顿次数: 0
-  - 总卡顿时长: 0.0 ms
-
-【问题诊断】
-  ✓ 未检测到明显异���
-```
-
-## 构建步骤
-
-### 1. 构建 AudioBench
+## 构建
 
 ```bash
 cargo build --release
 # 输出: target/release/audio_bench
 ```
 
-### 2. 构建 ViSQOL（Windows）
+## 运行
 
-需要先编译 Bazel 项目：
+```bash
+./target/release/audio_bench -r ref.wav -c rec.wav --speech
+```
 
-1. 安装 Bazel: https://bazel.build/install/windows
-2. 进入 visqol 源码目录
-3. 执行: `bazel build :visqol -c opt`
-4. 将 `bazel-bin\visqol.exe` 复制到项目目录
+## 技术细节
 
-## 技术方案
-
-- **主控程序**: Rust 编译，约 1.4MB
-- **音频评估**: ViSQOL 子进程调用（约 10MB）
-- **总体积**: ~15MB
+- **Gammatone 滤波器组**: 模拟人耳听觉特性，ERB 刻度
+- **NSIM 相似度**: intensity × structure，与 ViSQOL 对齐
+- **帧参数**: 80ms 帧长，75% 重叠
+- **对齐算法**: 归一化互相关 + 首次显著峰 + 分段局部对齐
