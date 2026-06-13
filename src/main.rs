@@ -16,6 +16,7 @@ mod metrics;
 mod gammatone;
 mod quality;
 mod spectrogram;
+mod dtw;
 mod report;
 
 use clap::Parser;

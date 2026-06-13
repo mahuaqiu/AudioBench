@@ -3,7 +3,8 @@
 use serde::Serialize;
 
 pub use crate::gammatone::{build_spectrogram, preprocess_spectrograms, scale_to_match_spl};
-pub use crate::spectrogram::{evaluate_patch_similarities, NsimPatchResult};
+pub use crate::spectrogram::{evaluate_patch_similarities, compute_patch_nsim, NsimPatchResult};
+pub use crate::dtw::{find_optimal_patch_matches, simple_sliding_search, PatchMatchResult};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QualityResult {
@@ -41,9 +42,12 @@ pub struct DiagnosisResult {
     pub freq_stability: f64,
 }
 
+// ViSQOL 标准参数（Audio 模式）
 const FRAME_DURATION_MS: f64 = 80.0;
-const FRAME_OVERLAP_RATIO: f64 = 0.75;
-const NUM_BANDS: usize = 24;
+const FRAME_OVERLAP: f64 = 0.25;        // ViSQOL: 25% overlap（之前错误用了 75%）
+const NUM_BANDS: usize = 32;            // ViSQOL: 32 bands for Audio（之前用了 24）
+const PATCH_SIZE_FRAMES: usize = 30;    // ViSQOL: 30 frames per patch（之前用了 8）
+const SEARCH_WINDOW_RADIUS: usize = 60; // ViSQOL 默认搜索窗口
 
 pub fn evaluate_quality(
     reference: &[f64],
@@ -51,7 +55,7 @@ pub fn evaluate_quality(
     sample_rate: u32,
 ) -> QualityResult {
     let frame_size = (sample_rate as f64 * FRAME_DURATION_MS / 1000.0) as usize;
-    let hop_size = (frame_size as f64 * FRAME_OVERLAP_RATIO) as usize;
+    let hop_size = (frame_size as f64 * FRAME_OVERLAP) as usize;
     
     // 与 ViSQOL 一致：在时域对 degraded 信号做 SPL 归一化
     let mut deg_normalized: Vec<f64> = degraded.to_vec();
@@ -67,7 +71,7 @@ pub fn evaluate_quality(
     
     // 检查数据有效性
     if ref_spectro.is_empty() || deg_spectro.is_empty() || 
-       ref_spectro[0].len() < 3 || deg_spectro[0].len() < 3 {
+       ref_spectro[0].len() < PATCH_SIZE_FRAMES || deg_spectro[0].len() < PATCH_SIZE_FRAMES {
         return QualityResult {
             moslqo: 1.0, vnsim: 0.0,
             fvnsim: vec![0.0; NUM_BANDS],
@@ -83,23 +87,38 @@ pub fn evaluate_quality(
     // 预处理：dB 转换 + 噪声门限 + 归一化
     preprocess_spectrograms(&mut ref_spectro, &mut deg_spectro, reference, degraded);
     
-    // patch 参数（与 ViSQOL 一致）
-    let patch_size_bands = NUM_BANDS;
-    let max_frames = ref_spectro[0].len().min(deg_spectro[0].len());
-    let patch_size_frames = if max_frames > 5 { 8 } else { max_frames.saturating_sub(2) }.max(3);
-    let hop_bands = NUM_BANDS;
-    let hop_frames = 1;
+    // 计算帧时长
+    let frame_duration = FRAME_DURATION_MS / 1000.0 * (1.0 - FRAME_OVERLAP);
     
-    let nsim_results = evaluate_patch_similarities(
-        &ref_spectro, &deg_spectro,
-        patch_size_bands, patch_size_frames, hop_bands, hop_frames,
+    // 使用 DTW 滑动搜索找最优匹配（与 ViSQOL FindMostOptimalDegPatches 一致）
+    let patch_matches = simple_sliding_search(
+        &ref_spectro,
+        &deg_spectro,
+        NUM_BANDS,
+        PATCH_SIZE_FRAMES,
+        frame_duration,
+        SEARCH_WINDOW_RADIUS,
     );
+    
+    // 对每个匹配计算详细的 NSIM 结果
+    let nsim_results: Vec<NsimPatchResult> = patch_matches.iter().map(|m| {
+        let ref_start_frame = (m.ref_start_time / frame_duration) as usize;
+        let deg_start_frame = (m.deg_start_time / frame_duration) as usize;
+        
+        let ref_patch = extract_patch(&ref_spectro, 0, NUM_BANDS, ref_start_frame, PATCH_SIZE_FRAMES);
+        let deg_patch = extract_patch(&deg_spectro, 0, NUM_BANDS, deg_start_frame, PATCH_SIZE_FRAMES);
+        
+        let mut result = compute_patch_nsim(&ref_patch, &deg_patch);
+        result.start_time_s = m.ref_start_time;
+        result.end_time_s = m.ref_end_time;
+        result
+    }).collect();
     
     // 计算各频段统计量（与 ViSQOL visqol.cc 一致）
     let num_bands = NUM_BANDS;
     let fvnsim = compute_band_means(&nsim_results, num_bands);
     let fvnsim10 = compute_band_quantile(&nsim_results, num_bands, 0.10);
-    let fstdnsim = compute_band_pooled_stddevs(&nsim_results, num_bands);
+    let fstdnsim = compute_band_pooled_stddevs(&nsim_results, num_bands, frame_duration);
     let fvdegenergy = compute_band_degraded_energy(&nsim_results, num_bands);
     
     // 全局 NSIM（所有频段的均值）
@@ -107,7 +126,7 @@ pub fn evaluate_quality(
         nsim_results.iter().map(|r| r.similarity).sum::<f64>() / nsim_results.len() as f64
     } else { 0.0 };
     
-    // MOS 预测（使用 ViSQOL 风格的 SVR 近似）
+    // MOS 预测
     let moslqo = predict_mos(&fvnsim, &fvnsim10, &fstdnsim, &fvdegenergy, vnsim);
     
     // 构建 patch 结果
@@ -117,7 +136,7 @@ pub fn evaluate_quality(
             freq_band_means: r.freq_band_means.clone(),
             ref_patch_start_time: r.start_time_s,
             ref_patch_end_time: r.end_time_s,
-            deg_patch_start_time: r.start_time_s,
+            deg_patch_start_time: r.start_time_s, // 简化处理
             deg_patch_end_time: r.end_time_s,
         }
     }).collect();
@@ -128,7 +147,29 @@ pub fn evaluate_quality(
     }
 }
 
-/// 计算各频段的平均 NSIM（与 ViSQOL CalcPerPatchMeanFreqBandMeans 一致）
+/// 从频谱图提取 patch
+fn extract_patch(
+    spectrogram: &[Vec<f64>],
+    start_band: usize,
+    num_bands: usize,
+    start_frame: usize,
+    num_frames: usize,
+) -> Vec<Vec<f64>> {
+    let mut patch = Vec::with_capacity(num_bands);
+    
+    for b in start_band..(start_band + num_bands).min(spectrogram.len()) {
+        let mut band_data = Vec::with_capacity(num_frames);
+        for f in start_frame..(start_frame + num_frames) {
+            let v = if f < spectrogram[b].len() { spectrogram[b][f] } else { 0.0 };
+            band_data.push(v);
+        }
+        patch.push(band_data);
+    }
+    
+    patch
+}
+
+/// 计算各频段的平均 NSIM
 fn compute_band_means(patches: &[NsimPatchResult], num_bands: usize) -> Vec<f64> {
     if patches.is_empty() { return vec![0.0; num_bands]; }
     
@@ -144,7 +185,7 @@ fn compute_band_means(patches: &[NsimPatchResult], num_bands: usize) -> Vec<f64>
     sums
 }
 
-/// 计算各频段的 10 百分位 NSIM（与 ViSQOL CalcPerPatchFreqBandQuantile 一致）
+/// 计算各频段的 10 百分位 NSIM
 fn compute_band_quantile(patches: &[NsimPatchResult], num_bands: usize, quantile: f64) -> Vec<f64> {
     if patches.is_empty() { return vec![0.0; num_bands]; }
     
@@ -171,8 +212,8 @@ fn compute_band_quantile(patches: &[NsimPatchResult], num_bands: usize, quantile
     result
 }
 
-/// 计算各频段的标准差（与 ViSQOL CalcPerPatchMeanFreqBandStdDevs 一致）
-fn compute_band_pooled_stddevs(patches: &[NsimPatchResult], num_bands: usize) -> Vec<f64> {
+/// 计算各频段的标准差
+fn compute_band_pooled_stddevs(patches: &[NsimPatchResult], num_bands: usize, frame_duration: f64) -> Vec<f64> {
     if patches.is_empty() { return vec![0.0; num_bands]; }
     
     // 计算全局均值
@@ -186,13 +227,13 @@ fn compute_band_pooled_stddevs(patches: &[NsimPatchResult], num_bands: usize) ->
     }
     for m in &mut global_means { *m /= patches.len() as f64; }
     
-    // 计算 pooled 方差（与 ViSQOL 一致）
+    // 计算 pooled 方差
     let mut frame_counts = vec![0; num_bands];
     let mut contribution = vec![0.0; num_bands];
     
     for patch in patches {
         let secs_in_patch = patch.end_time_s - patch.start_time_s;
-        let frame_count = ((secs_in_patch / 0.04).ceil() as usize).max(1);
+        let frame_count = ((secs_in_patch / frame_duration).ceil() as usize).max(1);
         
         for (i, &mean) in patch.freq_band_means.iter().enumerate() {
             if i < num_bands && i < patch.freq_band_stddevs.len() {
@@ -217,7 +258,7 @@ fn compute_band_pooled_stddevs(patches: &[NsimPatchResult], num_bands: usize) ->
     result
 }
 
-/// 计算各频段的降质能量（与 ViSQOL CalcPerPatchMeanFreqBandDegradedEnergy 一致）
+/// 计算各频段的降质能量
 fn compute_band_degraded_energy(patches: &[NsimPatchResult], num_bands: usize) -> Vec<f64> {
     if patches.is_empty() { return vec![1.0; num_bands]; }
     
@@ -231,14 +272,12 @@ fn compute_band_degraded_energy(patches: &[NsimPatchResult], num_bands: usize) -
     energy_sums
 }
 
-/// MOS 预测（与 ViSQOL svr_similarity_to_quality_mapper.cc 和 AlterForSimilarityExtremes 一致）
+/// MOS 预测（使用 ViSQOL 风格的 SVR 近似）
 fn predict_mos(fvnsim: &[f64], fvnsim10: &[f64], fstdnsim: &[f64], fvdegenergy: &[f64], vnsim: f64) -> f64 {
-    // 基础分数：使用 ViSQOL 风格的非线性映射
-    // 近似 SVR 模型：MOS = 1 + 4 / (1 + exp(-k * (nsim - offset))))
-    // 使用简化的多项式映射
+    // 使用 ViSQOL 风格的非线性映射
     let base_mos = 1.0 + vnsim * 3.5 + vnsim.powi(2) * 1.5;
     
-    // 低质量惩罚（与 ViSQOL AlterForSimilarityExtremes 一致）
+    // 低质量惩罚
     let mut penalty = 0.0;
     if !fvnsim.is_empty() && !fvnsim10.is_empty() {
         for (mean, p10) in fvnsim.iter().zip(fvnsim10.iter()) {

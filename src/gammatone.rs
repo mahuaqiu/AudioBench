@@ -289,8 +289,8 @@ pub fn preprocess_spectrograms(
     }
     
     // 相对门限（与 ViSQOL RaiseFloorPerFrame 一致）
-    apply_noise_floor(ref_spectro, 45.0);
-    apply_noise_floor(deg_spectro, 45.0);
+    apply_noise_floor(ref_spectro, 30.0);
+    apply_noise_floor(deg_spectro, 30.0);
     
     // 归一化到 0dB 地板（与 ViSQOL SubtractFloor 一致）
     let mut min_val = f64::INFINITY;
