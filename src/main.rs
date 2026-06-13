@@ -97,15 +97,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rec_duration = rec_audio.duration_secs();
     
     // 从对齐偏移开始，按参考音频长度分段评估录制音频
-    let aligned_start = align_result.offset_samples;
+    let aligned_start = align_result.offset_samples.min(rec_len);
     let available_len = rec_len.saturating_sub(aligned_start);
     
-    // 计算分段数��
-    let num_segments = if available_len >= ref_len {
-        (available_len as f64 / ref_len as f64).ceil() as usize
+    // 计算分段数量：以「完整覆盖一个参考长度」的整段为主，
+    // 仅当末尾残段超过参考长度一半时才额外计入，避免出现几乎全是补零的尾段。
+    let num_segments = if ref_len == 0 {
+        1
+    } else if available_len >= ref_len {
+        let full = available_len / ref_len;
+        let remainder = available_len % ref_len;
+        if remainder * 2 >= ref_len { full + 1 } else { full }
     } else {
         1
-    };
+    }
+    .max(1);
     
     println!("[*] 参考音频时长: {:.2}s, 录制音频对齐后可用: {:.2}s", 
              ref_duration, available_len as f64 / target_sample_rate as f64);
