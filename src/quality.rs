@@ -87,8 +87,10 @@ pub fn evaluate_quality(
     
     preprocess_spectrograms(&mut ref_spectro, &mut deg_spectro, reference, degraded);
     
+    // patch 帧宽需 >= 3 才能让 3x3 高斯卷积有效工作；
+    // 帧不足时在 compute_patch_nsim 内自动退化为逐点 SSIM。
     let patch_size_bands = NUM_BANDS;
-    let patch_size_frames = 2;
+    let patch_size_frames = ref_spectro[0].len().min(deg_spectro[0].len()).min(8).max(3);
     let hop_bands = NUM_BANDS;
     let hop_frames = 1;
     
