@@ -7,8 +7,8 @@
 //!   audio_bench --reference ref.wav --recorded rec.wav
 //!
 //! 分段评估:
-//!   当录制音频比参考音频长时，自动按参考音频长度分段评估，
-//!   每段输出独立评分，并汇总整体统计。
+//!   当录制音频中参考音频不规则出现多次时，使用多峰检测自动发现所有出现位置，
+//!   每段独立评分，并汇总整体统计。
 
 mod alignment;
 mod audio_io;
@@ -34,10 +34,9 @@ struct Args {
     #[clap(long = "recorded", short = 'c', required = true)]
     recorded: PathBuf,
 
-    /// 目标采样率（语音模式用 16000，音频模式用 48000）
-    #[clap(long = "sample-rate", short = 's', default_value = "48000")]
+    /// 目标采样率（默认使用输入文件采样率）
+    #[clap(long = "sample-rate", short = 's', default_value = "0")]
     sample_rate: u32,
-
 
     /// 输出 JSON 报告文件路径（可选）
     #[clap(long = "output", short = 'o')]
@@ -66,7 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("      原始采样率: {}, 时长: {:.2}s", 
              rec_audio.sample_rate, rec_audio.duration_secs());
     
-    // 确定目标采样率：用户指定则使用用户指定的，否则使用输入文件的采样率
+    // 确定目标采样率
     let target_sample_rate = if args.sample_rate > 0 {
         args.sample_rate
     } else {
@@ -90,64 +89,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("[*] 使用原始采样率 {} Hz", target_sample_rate);
     }
     
-    // 全局对齐：定位参考首次出现位置（作为第 0 段的预期起点）
-    println!("[*] 执行全局信号对齐...");
-    let align_result = alignment::find_alignment(
-        &ref_audio.samples,
-        &rec_audio.samples,
-        target_sample_rate,
-    );
-    println!(
-        "      首次出现延迟: {:.1} ms, 置信度: {:.1}%",
-        align_result.delay_ms,
-        align_result.confidence * 100.0
-    );
-    
     let ref_len = ref_audio.samples.len();
     let rec_len = rec_audio.samples.len();
     let ref_duration = ref_audio.duration_secs();
     let rec_duration = rec_audio.duration_secs();
     
-    let aligned_start = align_result.offset_samples.min(rec_len);
-    let available_len = rec_len.saturating_sub(aligned_start);
-
-    // 分段数量计算（末尾残段超过半个参考长度才计入）
-    let num_segments = if ref_len == 0 {
-        1
-    } else if available_len >= ref_len {
-        let full = available_len / ref_len;
-        let remainder = available_len % ref_len;
-        if remainder * 2 >= ref_len { full + 1 } else { full }
-    } else {
-        1
+    // 多峰检测：自动发现录制音频中参考音频的所有出现位置
+    println!("[*] 执行多峰检测，定位参考音频的所有出现位置...");
+    let alignment_peaks = alignment::find_all_alignments(
+        &ref_audio.samples,
+        &rec_audio.samples,
+        target_sample_rate,
+        0.3,  // 置信度阈值：低于 0.3 的峰被过滤
+    );
+    
+    let num_segments = alignment_peaks.len();
+    println!("[*] 检测到 {} 个参考音频出现位置", num_segments);
+    for (i, peak) in alignment_peaks.iter().enumerate() {
+        println!("      第 {} 处: 偏移 {:.2}s, 置信度 {:.1}%", 
+                 i + 1, peak.delay_ms / 1000.0, peak.confidence * 100.0);
     }
-    .max(1);
 
     println!(
-        "[*] 参考音频时长: {:.2}s, 录制音频对齐后可用: {:.2}s",
-        ref_duration,
-        available_len as f64 / target_sample_rate as f64
+        "[*] 参考音频时长: {:.2}s, 录制音频时长: {:.2}s",
+        ref_duration, rec_duration
     );
     println!("[*] 分段数量: {}", num_segments);
 
-    // 局部对齐搜索半径：取参考长度的 25%，覆盖循环周期偏差 + 时钟漂移累积
-    let search_radius = (ref_len / 4).max(1);
-
     let mut segment_results = Vec::with_capacity(num_segments);
 
-    for seg_idx in 0..num_segments {
-        // 预期起点：按 aligned_start + seg_idx * ref_len 估计，
-        // 仅作为局部对齐的「搜索中心」，不直接用作切分点。
-        let expected_start = aligned_start + seg_idx * ref_len;
-
-        // 每段在预期位置邻域内独立重对齐（修复 #1 核心）
-        let seg_align = alignment::find_local_alignment(
-            &ref_audio.samples,
-            &rec_audio.samples,
-            target_sample_rate,
-            expected_start,
-            search_radius,
-        );
+    for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
         let seg_start = seg_align.offset_samples.min(rec_len);
         let seg_end = (seg_start + ref_len).min(rec_len);
 
@@ -165,7 +136,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_end_time = seg_end as f64 / target_sample_rate as f64;
 
         println!(
-            "[*] 评估第 {}/{} 段 ({:.2}s - {:.2}s, 局部对齐置信度 {:.1}%)...",
+            "[*] 评估第 {}/{} 段 ({:.2}s - {:.2}s, 置信度 {:.1}%)...",
             seg_idx + 1,
             num_segments,
             seg_start_time,
@@ -213,18 +184,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     
+    // 全局对齐信息（首次出现的峰值）
+    let first_peak = alignment_peaks.first().cloned().unwrap_or(alignment::AlignmentResult {
+        offset_samples: 0,
+        delay_ms: 0.0,
+        confidence: 0.0,
+    });
+    
     // 生成报告
     let report = report::generate_report(
         report::ReportConfig {
             reference_path: args.reference.to_string_lossy().to_string(),
             recorded_path: args.recorded.to_string_lossy().to_string(),
             target_sample_rate,
-            
         },
         report::AlignmentInfo {
-            offset_samples: align_result.offset_samples,
-            delay_ms: align_result.delay_ms,
-            confidence: align_result.confidence,
+            offset_samples: first_peak.offset_samples,
+            delay_ms: first_peak.delay_ms,
+            confidence: first_peak.confidence,
         },
         ref_duration,
         rec_duration,

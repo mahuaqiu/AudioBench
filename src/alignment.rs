@@ -1,10 +1,11 @@
 //! 信号对齐模块
 //! 使用 FFT 互相关 + 归一化相关系数，在录制音频中定位参考音频的精确起始位置。
-//! 支持全局对齐（首次出现位置）与分段局部对齐（预期位置邻域内重对齐）。
+//! 支持多峰检测（自动发现所有出现位置），用于分段评估场景。
 
 use rustfft::{num_complex::Complex, FftPlanner};
 
 /// 对齐结果
+#[derive(Debug, Clone)]
 pub struct AlignmentResult {
     /// 参考音频在录制音频中的起始偏移（采样点数）
     pub offset_samples: usize,
@@ -13,9 +14,6 @@ pub struct AlignmentResult {
     /// 归一化相关系数峰值（0~1，越高越可靠）
     pub confidence: f64,
 }
-
-/// 显著峰判定阈值：低于该值认为没有可靠匹配，回退到全局最大峰。
-const PEAK_CONFIDENCE_THRESHOLD: f64 = 0.5;
 
 /// 通过 FFT 互相关计算原始互相关序列（未归一化）。
 /// 返回 xcorr[k] 表示参考相对录制偏移 k 个采样点时的相关值。
@@ -68,7 +66,7 @@ fn prefix_square_sums(signal: &[f64]) -> Vec<f64> {
     prefix
 }
 
-/// 查询 degraded[start..start+len] 的能量（平方和）。
+/// 查询 degraded[start..start+len] 的��量（平方和）。
 fn window_energy(prefix: &[f64], start: usize, len: usize) -> f64 {
     let end = (start + len).min(prefix.len() - 1);
     if end <= start {
@@ -77,113 +75,122 @@ fn window_energy(prefix: &[f64], start: usize, len: usize) -> f64 {
     prefix[end] - prefix[start]
 }
 
-/// 在指定搜索区间 [search_start, search_end] 内，
-/// 计算归一化相关系数序列，并返回 (首个显著峰偏移, 峰值)。
+/// 多峰检测：在录制音频中自动发现参考音频的所有出现位置。
 ///
-/// 归一化：corr[k] / √(ref_energy × seg_energy(k))，落在 0~1。
-/// 选峰策略：优先返回首个 >= 阈值的局部峰（首次出现位置），
-/// 否则返回区间内全局最大峰。
-fn pick_peak(
-    xcorr: &[f64],
-    ref_energy: f64,
-    deg_prefix: &[f64],
-    ref_len: usize,
-    search_start: usize,
-    search_end: usize,
-) -> (usize, f64) {
-    let search_end = search_end.min(xcorr.len().saturating_sub(1));
-    if search_start > search_end || ref_energy <= 0.0 {
-        return (search_start, 0.0);
-    }
-
-    let normalized = |k: usize| -> f64 {
-        let seg_energy = window_energy(deg_prefix, k, ref_len);
-        let denom = (ref_energy * seg_energy).sqrt();
-        if denom > 1e-12 {
-            (xcorr[k].abs() / denom).min(1.0)
-        } else {
-            0.0
-        }
-    };
-
-    // 全局最大峰（兜底）
-    let mut best_idx = search_start;
-    let mut best_val = normalized(search_start);
-    // 首个显著局部峰
-    let mut first_significant: Option<(usize, f64)> = None;
-
-    for k in search_start..=search_end {
-        let v = normalized(k);
-        if v > best_val {
-            best_val = v;
-            best_idx = k;
-        }
-        if first_significant.is_none() && v >= PEAK_CONFIDENCE_THRESHOLD {
-            // 简单局部峰确认：比相邻点不低
-            let prev_ok = k == search_start || v >= normalized(k - 1);
-            let next_ok = k == search_end || v >= normalized(k + 1);
-            if prev_ok && next_ok {
-                first_significant = Some((k, v));
-            }
-        }
-    }
-
-    first_significant.unwrap_or((best_idx, best_val))
-}
-
-/// 全局对齐：在整个录制中定位参考首次出现的位置。
-pub fn find_alignment(reference: &[f64], degraded: &[f64], sample_rate: u32) -> AlignmentResult {
+/// 算法流程：
+/// 1. 计算全程归一化互相关
+/// 2. 在互相关序列上搜索所有局部极大值
+/// 3. 过滤：峰值 >= 阈值 且 与前一个峰间距 >= min_gap_samples
+/// 4. 按时间排序返回
+///
+/// 返回值保证非空：至少包含全局最高峰（即使低于阈值）。
+pub fn find_all_alignments(
+    reference: &[f64],
+    degraded: &[f64],
+    sample_rate: u32,
+    confidence_threshold: f64,
+) -> Vec<AlignmentResult> {
     let ref_len = reference.len();
     let deg_len = degraded.len();
+
+    if ref_len == 0 || deg_len < ref_len {
+        return vec![AlignmentResult {
+            offset_samples: 0,
+            delay_ms: 0.0,
+            confidence: 0.0,
+        }];
+    }
 
     let xcorr = raw_cross_correlation(reference, degraded);
     let deg_prefix = prefix_square_sums(degraded);
     let ref_energy: f64 = reference.iter().map(|x| x * x).sum();
 
     let max_search = deg_len.saturating_sub(ref_len);
-    let (peak_idx, peak_val) =
-        pick_peak(&xcorr, ref_energy, &deg_prefix, ref_len, 0, max_search);
 
-    AlignmentResult {
-        offset_samples: peak_idx,
-        delay_ms: peak_idx as f64 / sample_rate as f64 * 1000.0,
-        confidence: peak_val,
+    // 预计算归一化互相关序列（只在搜索范围内）
+    let normalized_xcorr: Vec<f64> = (0..=max_search)
+        .map(|k| {
+            let seg_energy = window_energy(&deg_prefix, k, ref_len);
+            let denom = (ref_energy * seg_energy).sqrt();
+            if denom > 1e-12 {
+                (xcorr[k].abs() / denom).min(1.0)
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // 最小峰间距：参考长度的 80%（避免同一次出现的旁瓣被重复检测）
+    let min_gap_samples = (ref_len as f64 * 0.8) as usize;
+    // 峰检测半窗口：用于判断局部极大值
+    let peak_half_window = ((ref_len as f64 * 0.05) as usize).max(1);
+
+    // 搜索所有局部极大值
+    let mut candidates: Vec<(usize, f64)> = Vec::new();
+
+    for k in 0..normalized_xcorr.len() {
+        let v = normalized_xcorr[k];
+        if v < confidence_threshold {
+            continue;
+        }
+        // 局部极大值判定：在 [k-half, k+half] 范围内 v 最大
+        let lo = k.saturating_sub(peak_half_window);
+        let hi = (k + peak_half_window).min(normalized_xcorr.len() - 1);
+        let is_local_max = (lo..=hi).all(|j| normalized_xcorr[j] <= v);
+        if !is_local_max {
+            continue;
+        }
+        // 精确化：在局部极大值邻域内找到真正的最大点
+        let refine_lo = k.saturating_sub(peak_half_window);
+        let refine_hi = (k + peak_half_window).min(normalized_xcorr.len() - 1);
+        let best_k = (refine_lo..=refine_hi)
+            .max_by(|&a, &b| {
+                normalized_xcorr[a]
+                    .partial_cmp(&normalized_xcorr[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(k);
+
+        candidates.push((best_k, normalized_xcorr[best_k]));
     }
-}
 
-/// 分段局部对齐：在「预期起点 ± search_radius」邻域内重新对齐当前段。
-///
-/// 用于分段评估时每段独立对齐，避免 `aligned_start + i*ref_len` 盲推
-/// 因循环周期偏差 / 时钟漂移累积而错位。
-pub fn find_local_alignment(
-    reference: &[f64],
-    degraded: &[f64],
-    sample_rate: u32,
-    expected_start: usize,
-    search_radius: usize,
-) -> AlignmentResult {
-    let ref_len = reference.len();
-    let deg_len = degraded.len();
-
-    let xcorr = raw_cross_correlation(reference, degraded);
-    let deg_prefix = prefix_square_sums(degraded);
-    let ref_energy: f64 = reference.iter().map(|x| x * x).sum();
-
-    let search_start = expected_start.saturating_sub(search_radius);
-    let search_end = (expected_start + search_radius).min(deg_len.saturating_sub(ref_len));
-
-    let (peak_idx, peak_val) = pick_peak(
-        &xcorr,
-        ref_energy,
-        &deg_prefix,
-        ref_len,
-        search_start,
-        search_end,
-    );
-
-    AlignmentResult {
-        offset_samples: peak_idx,
-        delay_ms: peak_idx as f64 / sample_rate as f64 * 1000.0,
-        confidence: peak_val,
+    // 按置信度降序排序，按 min_gap_samples 去重：优先保留置信度更高的峰
+    candidates.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
+    let mut filtered: Vec<(usize, f64)> = Vec::new();
+    for (pos, conf) in &candidates {
+        let too_close = filtered.iter().any(|(existing_pos, _)| {
+            (*pos as isize - *existing_pos as isize).unsigned_abs() < min_gap_samples
+        });
+        if !too_close {
+            filtered.push((*pos, *conf));
+        }
     }
+
+    // 按时间排序
+    filtered.sort_by_key(|(pos, _)| *pos);
+
+    // 兜底：如果没找到任何满足阈值的峰，返回全���最高峰
+    if filtered.is_empty() {
+        let best_k = (0..normalized_xcorr.len())
+            .max_by(|&a, &b| {
+                normalized_xcorr[a]
+                    .partial_cmp(&normalized_xcorr[b])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(0);
+        filtered.push((best_k, normalized_xcorr[best_k]));
+    }
+
+    filtered
+        .into_iter()
+        .map(|(offset, confidence)| AlignmentResult {
+            offset_samples: offset,
+            delay_ms: offset as f64 / sample_rate as f64 * 1000.0,
+            confidence,
+        })
+        .collect()
 }
