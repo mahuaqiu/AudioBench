@@ -3,24 +3,29 @@
 //! 实现与 ViSQOL ComparisonPatchesSelector 等效的 DTW 搜索机制
 //! 核心参考: comparison_patches_selector.cc
 
-use crate::spectrogram::{evaluate_patch_similarities, NsimPatchResult};
+
 
 /// Patch 匹配结果
 #[derive(Debug, Clone)]
 pub struct PatchMatchResult {
+    #[allow(dead_code)]
     pub similarity: f64,
     pub ref_start_time: f64,
     pub ref_end_time: f64,
     pub deg_start_time: f64,
+    #[allow(dead_code)]
     pub deg_end_time: f64,
 }
 
-/// DTW 搜索：在搜索窗口内找最优的 ref-deg patch 匹配
+/// DTW 搜索：在搜索窗口内找最优的 ref-deg patch 匹配（完整DP版）
+#[allow(dead_code)]
+/// DTW 搜索：在搜索窗口内找最优的 ref-deg patch 匹配（完整DP版）
 /// 
 /// 算法：
 /// 1. 对每个参考 patch，在 deg 信号的搜索窗口内遍历所有可能位置
 /// 2. 使用 DP/累积相似度找最优路径
 /// 3. Viterbi 回溯获取最终匹配
+#[allow(dead_code)]
 pub fn find_optimal_patch_matches(
     ref_spectro: &[Vec<f64>],
     deg_spectro: &[Vec<f64>],
@@ -60,8 +65,8 @@ pub fn find_optimal_patch_matches(
     
     // 预计算所有 deg patches 的 NSIM（滑动窗口方式）
     // 为了效率，我们只计算需要的
-    let hop_bands = patch_size_bands;
-    let hop_frames = 1; // 逐帧滑动以支持 DTW
+    let _hop_bands = patch_size_bands;
+    let _hop_frames = 1; // 逐帧滑动以支持 DTW
     
     // 对每个参考 patch，计算其在搜索窗口内的所有相似度
     for (patch_idx, &ref_frame_start) in ref_patch_indices.iter().enumerate() {

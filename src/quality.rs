@@ -3,8 +3,8 @@
 use serde::Serialize;
 
 pub use crate::gammatone::{build_spectrogram, preprocess_spectrograms, scale_to_match_spl};
-pub use crate::spectrogram::{evaluate_patch_similarities, compute_patch_nsim, NsimPatchResult};
-pub use crate::dtw::{find_optimal_patch_matches, simple_sliding_search, PatchMatchResult};
+pub use crate::spectrogram::{compute_patch_nsim, NsimPatchResult};
+pub use crate::dtw::simple_sliding_search;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct QualityResult {
@@ -88,7 +88,9 @@ pub fn evaluate_quality(
     preprocess_spectrograms(&mut ref_spectro, &mut deg_spectro, reference, degraded);
     
     // 计算帧时长
-    let frame_duration = FRAME_DURATION_MS / 1000.0 * (1.0 - FRAME_OVERLAP);
+    // ViSQOL: frame_duration = window_size * overlap (帧移)
+    // 80ms 窗口, 25% 重叠 → 20ms 帧移
+    let frame_duration = FRAME_DURATION_MS / 1000.0 * FRAME_OVERLAP;
     
     // 使用 DTW 滑动搜索找最优匹配（与 ViSQOL FindMostOptimalDegPatches 一致）
     let patch_matches = simple_sliding_search(

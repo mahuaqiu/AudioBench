@@ -261,7 +261,8 @@ pub fn compute_patch_nsim(
     }
 }
 
-/// 提取 patch
+/// 提取 patch（供滑动搜索使用，保留备用）
+#[allow(dead_code)]
 fn extract_patch(
     spectrogram: &[Vec<f64>],
     start_band: usize,
@@ -283,7 +284,8 @@ fn extract_patch(
     patch
 }
 
-/// 评估多个 patch 的 NSIM 相似度
+/// 评估多个 patch 的 NSIM 相似度（旧版接口，保留备用）
+#[allow(dead_code)]
 pub fn evaluate_patch_similarities(
     ref_spectro: &[Vec<f64>],
     deg_spectro: &[Vec<f64>],
