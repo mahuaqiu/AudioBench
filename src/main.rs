@@ -81,27 +81,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     rec_audio = rec_audio.resample(target_sample_rate)?;
     println!("[*] 重采样到 {} Hz", target_sample_rate);
     
-    // FFT 互相关对齐：找到参考音频在录制音频中的起始位置
-    println!("[*] 执行信号对齐...");
+    // 全局对齐：定位参考首次出现位置（作为第 0 段的预期起点）
+    println!("[*] 执行全局信号对齐...");
     let align_result = alignment::find_alignment(
         &ref_audio.samples,
         &rec_audio.samples,
         target_sample_rate,
     );
-    println!("      延迟: {:.1} ms, 置信度: {:.1}%", 
-             align_result.delay_ms, align_result.confidence * 100.0);
+    println!(
+        "      首次出现延迟: {:.1} ms, 置信度: {:.1}%",
+        align_result.delay_ms,
+        align_result.confidence * 100.0
+    );
     
     let ref_len = ref_audio.samples.len();
     let rec_len = rec_audio.samples.len();
     let ref_duration = ref_audio.duration_secs();
     let rec_duration = rec_audio.duration_secs();
     
-    // 从对齐偏移开始，按参考音频长度分段评估录制音频
     let aligned_start = align_result.offset_samples.min(rec_len);
     let available_len = rec_len.saturating_sub(aligned_start);
-    
-    // 计算分段数量：以「完整覆盖一个参考长度」的整段为主，
-    // 仅当末尾残段超过参考长度一半时才额外计入，避免出现几乎全是补零的尾段。
+
+    // 分段数量计算（末尾残段超过半个参考长度才计入）
     let num_segments = if ref_len == 0 {
         1
     } else if available_len >= ref_len {
@@ -112,30 +113,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         1
     }
     .max(1);
-    
-    println!("[*] 参考音频时长: {:.2}s, 录制音频对齐后可用: {:.2}s", 
-             ref_duration, available_len as f64 / target_sample_rate as f64);
+
+    println!(
+        "[*] 参考音频时长: {:.2}s, 录制音频对齐后可用: {:.2}s",
+        ref_duration,
+        available_len as f64 / target_sample_rate as f64
+    );
     println!("[*] 分段数量: {}", num_segments);
-    
+
+    // 局部对齐搜索半径：取参考长度的 25%，覆盖循环周期偏差 + 时钟漂移累积
+    let search_radius = (ref_len / 4).max(1);
+
     let mut segment_results = Vec::with_capacity(num_segments);
-    
+
     for seg_idx in 0..num_segments {
-        let seg_start = aligned_start + seg_idx * ref_len;
+        // 预期起点：按 aligned_start + seg_idx * ref_len 估计，
+        // 仅作为局部对齐的「搜索中心」，不直接用作切分点。
+        let expected_start = aligned_start + seg_idx * ref_len;
+
+        // 每段在预期位置邻域内独立重对齐（修复 #1 核心）
+        let seg_align = alignment::find_local_alignment(
+            &ref_audio.samples,
+            &rec_audio.samples,
+            target_sample_rate,
+            expected_start,
+            search_radius,
+        );
+        let seg_start = seg_align.offset_samples.min(rec_len);
         let seg_end = (seg_start + ref_len).min(rec_len);
-        
-        // 录制音频分段
+
+        // 记录该段实际补零长度，供卡顿检测排除补零尾段使用
+        let real_len = seg_end.saturating_sub(seg_start);
+        let padded_len = ref_len.saturating_sub(real_len);
+
         let mut seg_degraded = rec_audio.samples[seg_start..seg_end].to_vec();
         // 不足参考长度的末尾补零
         seg_degraded.resize(ref_len, 0.0);
-        
+
         let seg_ref_samples = ref_audio.samples.clone();
-        
+
         let seg_start_time = seg_start as f64 / target_sample_rate as f64;
         let seg_end_time = seg_end as f64 / target_sample_rate as f64;
-        
-        println!("[*] 评估第 {}/{} 段 ({:.2}s - {:.2}s)...", 
-                 seg_idx + 1, num_segments, seg_start_time, seg_end_time);
-        
+
+        println!(
+            "[*] 评估第 {}/{} 段 ({:.2}s - {:.2}s, 局部对齐置信度 {:.1}%)...",
+            seg_idx + 1,
+            num_segments,
+            seg_start_time,
+            seg_end_time,
+            seg_align.confidence * 100.0
+        );
+
         // 质量评估（ViSQOL 兼容指标）
         let quality_result = quality::evaluate_quality(
             &seg_ref_samples,
@@ -143,26 +171,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             target_sample_rate,
             use_speech_mode,
         );
-        
+
         // SNR
         let snr = metrics::compute_snr(&seg_ref_samples, &seg_degraded);
-        
-        // 卡顿检测
+
+        // 卡顿检测（排除补零尾段）
         let dropouts = metrics::detect_dropouts(
             &seg_ref_samples,
             &seg_degraded,
             target_sample_rate,
             0.005,
             20.0,
+            padded_len,
         );
-        
+
         // 幅值统计
         let level_ref = metrics::compute_level_stats(&seg_ref_samples);
         let level_deg = metrics::compute_level_stats(&seg_degraded);
-        
+
         // 诊断
         let diagnosis = quality::diagnose(&quality_result);
-        
+
         segment_results.push(report::SegmentResult {
             segment_index: seg_idx,
             start_time_s: seg_start_time,

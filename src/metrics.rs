@@ -57,13 +57,20 @@ pub fn detect_dropouts(
     sample_rate: u32,
     silence_threshold: f64,
     min_duration_ms: f64,
+    padded_len: usize,
 ) -> DropoutResult {
+    // 有效检测范围：排除补零尾段
+    let valid_len = reference.len().saturating_sub(padded_len);
     let min_samples = (sample_rate as f64 * min_duration_ms / 1000.0) as usize;
     let mut events = Vec::new();
     let mut in_dropout = false;
     let mut dropout_start = 0usize;
     
     for (i, (r, d)) in reference.iter().zip(degraded.iter()).enumerate() {
+        // 跳过补零尾段，不检测卡顿
+        if i >= valid_len {
+            break;
+        }
         let degraded_silent = d.abs() < silence_threshold;
         let ref_has_sound = r.abs() > silence_threshold * 2.0;
         
@@ -89,11 +96,12 @@ pub fn detect_dropouts(
         }
     }
     
-    if in_dropout {
-        let duration = reference.len() - dropout_start;
+    // 处理末尾可能未关闭的卡顿事件（仅在有效范围内）
+    if in_dropout && dropout_start < valid_len {
+        let duration = valid_len - dropout_start;
         if duration >= min_samples {
             let start_time = dropout_start as f64 / sample_rate as f64;
-            let end_time = reference.len() as f64 / sample_rate as f64;
+            let end_time = valid_len as f64 / sample_rate as f64;
             events.push(DropoutEvent {
                 start_time_s: start_time,
                 end_time_s: end_time,

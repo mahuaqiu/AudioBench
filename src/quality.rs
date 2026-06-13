@@ -225,7 +225,6 @@ fn predict_mos(fvnsim: &[f64], fvnsim10: &[f64], fstdnsim: &[f64], fvdegenergy: 
         if deviation > 0.5 { energy_penalty += deviation * 0.2; }
     }
     let mos = sim_contrib - low_score_penalty - instability_penalty - energy_penalty;
-    if vnsim < 0.15 { return 1.0; }
     mos.clamp(1.0, 5.0)
 }
 

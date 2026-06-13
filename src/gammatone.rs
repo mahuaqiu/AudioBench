@@ -45,13 +45,28 @@ pub fn make_gammatone_filters(sample_rate: u32, num_bands: usize, min_freq: f64,
         let bw = 1.019 * 2.0 * PI * erb;
         bandwidths.push(bw);
         
-        // 简化的滤波器系数 [center_freq, bw, gain]
-        coeffs.push(vec![*cf, bw, 1.0]);
+        // 二阶带通滤波器系数 (biquad)
+        // 使用标准双二阶变换：中心频率 cf，带宽 erb
+        let w0 = 2.0 * PI * cf / sample_rate as f64;
+        let bw_norm = erb / (sample_rate as f64 / 2.0);  // 归一化带宽
+        let alpha = (bw_norm * PI).sin();
+        let cos_w0 = w0.cos();
+
+        // 带通滤波器系数
+        let b0 = alpha;
+        let b1 = 0.0;
+        let b2 = -alpha;
+        let a0 = 1.0 + alpha;
+        let a1 = -2.0 * cos_w0;
+        let a2 = 1.0 - alpha;
+
+        // 归一化 a0，使 a1, a2 直接可用
+        coeffs.push([b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0]);
     }
     
     GammatoneFilter {
         center_freqs,
-        coeffs,
+        biquad_coeffs: coeffs,
         bandwidths,
         num_bands,
     }
@@ -61,43 +76,46 @@ pub fn make_gammatone_filters(sample_rate: u32, num_bands: usize, min_freq: f64,
 #[derive(Debug, Clone)]
 pub struct GammatoneFilter {
     pub center_freqs: Vec<f64>,
-    coeffs: Vec<Vec<f64>>,
+    // 二阶 IIR 带通滤波器系数 [b0, b1, b2, a1, a2]
+    biquad_coeffs: Vec<[f64; 5]>,
     bandwidths: Vec<f64>,
     num_bands: usize,
 }
 
 impl GammatoneFilter {
-    /// 应用简化 Gammatone 滤波器
-    pub fn apply(&self, signal: &[f64], sample_rate: u32) -> Vec<f64> {
+    /// 应用真正的二阶 IIR 带通 Gammatone 滤波器
+    pub fn apply(&self, signal: &[f64], _sample_rate: u32) -> Vec<f64> {
         let num_samples = signal.len();
         let mut output = vec![0.0; self.num_bands * num_samples];
-        
+
         for band in 0..self.num_bands {
-            let cf = self.coeffs[band][0];
-            let bw = self.bandwidths[band];
-            
-            // 使用带通滤波器近似 Gammatone
-            // 中心频率 cf，带宽 bw
-            let _omega = 2.0 * PI * cf / sample_rate as f64;
-            let alpha = (bw * PI / sample_rate as f64).tan();
-            
-            // 简化的一阶 IIR 滤波器
-            let mut y = 0.0;
-            let mut x_prev = 0.0;
-            
+            let coeffs = self.biquad_coeffs[band];
+            let b0 = coeffs[0];
+            let b1 = coeffs[1];
+            let b2 = coeffs[2];
+            let a1 = coeffs[3];
+            let a2 = coeffs[4];
+
+            // 二阶 IIR 状态变量
+            let mut x1 = 0.0_f64;
+            let mut x2 = 0.0_f64;
+            let mut y1 = 0.0_f64;
+            let mut y2 = 0.0_f64;
+
             for (i, &x) in signal.iter().enumerate() {
-                // 低通近似
-                let x_filtered = x * 0.3 + x_prev * 0.7;
-                x_prev = x;
-                
-                // 带通响应
-                let bandpass = (x_filtered * (1.0 + alpha) - y * (1.0 - alpha)) / (1.0 + alpha);
-                y = y + bandpass;
-                
+                // 二阶直接形式 IIR: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]
+                let y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+
+                // 更新状态
+                x2 = x1;
+                x1 = x;
+                y2 = y1;
+                y1 = y;
+
                 output[band * num_samples + i] = y.abs();
             }
         }
-        
+
         output
     }
 }
@@ -164,13 +182,34 @@ pub fn build_spectrogram(
 
 /// 计算 SPL（声压级）归一化因子
 pub fn compute_spl_scale_factor(reference: &[f64], degraded: &[f64]) -> f64 {
-    let ref_rms = (reference.iter().map(|x| x * x).sum::<f64>() / reference.len() as f64).sqrt();
-    let deg_rms = (degraded.iter().map(|x| x * x).sum::<f64>() / degraded.len() as f64).sqrt();
+    // 使用有效 RMS（排除极端静音帧），避免静音主导导致归一化失真
+    let ref_rms = compute_active_rms(reference);
+    let deg_rms = compute_active_rms(degraded);
     
     if deg_rms > 1e-10 && ref_rms > 1e-10 {
         ref_rms / deg_rms
     } else {
         1.0
+    }
+}
+
+/// 计算有效 RMS：仅统计能量超过全局均值 5% 的样本，避免极端静音主导
+fn compute_active_rms(signal: &[f64]) -> f64 {
+    let global_mean = signal.iter().map(|x| x * x).sum::<f64>() / signal.len() as f64;
+    let threshold = global_mean * 0.05;  // 能量阈值
+
+    let active_sum: f64 = signal.iter()
+        .map(|x| {
+            let x2 = x * x;
+            if x2 > threshold { x2 } else { 0.0 }
+        })
+        .sum();
+    let active_count = signal.iter().filter(|&&x| x * x > threshold).count();
+
+    if active_count > 0 {
+        (active_sum / active_count as f64).sqrt()
+    } else {
+        (global_mean).sqrt()
     }
 }
 
