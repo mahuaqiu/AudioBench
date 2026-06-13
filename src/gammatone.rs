@@ -37,13 +37,11 @@ pub fn make_gammatone_filters(sample_rate: u32, num_bands: usize, min_freq: f64,
     let _t = 1.0 / sample_rate as f64;
     
     let mut coeffs = Vec::with_capacity(num_bands);
-    let mut bandwidths = Vec::with_capacity(num_bands);
     
     for cf in &center_freqs {
         // ERB 带宽
         let erb = ((cf / ear_q).powf(1.0) + min_bw.powf(1.0)).powf(1.0 / 1.0);
-        let bw = 1.019 * 2.0 * PI * erb;
-        bandwidths.push(bw);
+        let _bw = 1.019 * 2.0 * PI * erb;
         
         // 二阶带通滤波器系数 (biquad)
         // 使用标准双二阶变换：中心频率 cf，带宽 erb
@@ -67,7 +65,6 @@ pub fn make_gammatone_filters(sample_rate: u32, num_bands: usize, min_freq: f64,
     GammatoneFilter {
         center_freqs,
         biquad_coeffs: coeffs,
-        bandwidths,
         num_bands,
     }
 }
@@ -78,7 +75,6 @@ pub struct GammatoneFilter {
     pub center_freqs: Vec<f64>,
     // 二阶 IIR 带通滤波器系数 [b0, b1, b2, a1, a2]
     biquad_coeffs: Vec<[f64; 5]>,
-    bandwidths: Vec<f64>,
     num_bands: usize,
 }
 

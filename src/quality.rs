@@ -180,7 +180,7 @@ fn compute_band_pooled_stddevs(patches: &[NsimPatchResult], num_bands: usize) ->
     let n = patches.len() as f64;
     let mut contribution = vec![0.0; num_bands];
     for patch in patches {
-        for (i, intensity) in patch.intensity.iter().enumerate() {
+        for (i, _intensity) in patch.intensity.iter().enumerate() {
             if i < num_bands && i < patch.structure.len() && i < patch.freq_band_stddevs.len() {
                 let mean = global_means[i];
                 let stddev = patch.freq_band_stddevs[i];
