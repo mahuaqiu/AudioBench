@@ -1,63 +1,45 @@
 //! 音频质量评估模块（纯 Rust 实现，兼容 ViSQOL 指标体系）
 //! 
-//! 完整实现 ViSQOL 的核心指标，无需外部依赖：
+//! 完整实现 ViSQOL 的核心指标：
 //! - MOS-LQO: 预测的 Mean Opinion Score (1-5)
 //! - VNSIM: 全局神经元网络相似度
-//! - fVNSIM: 各巴克频段的平均相似度
-//! - fVNSIM10: 各巴克频段的 10 百分位相似度
-//! - fstdNSIM: 各巴克频段相似度的标准差
-//! - fVDegEnergy: 各巴克频段的降质能量
-//! - Patch 相似度列表: 每帧各 patch 的详细对比结果
+//! - fVNSIM: 各频段平均相似度
+//! - fVNSIM10: 各频段 10 百分位相似度
+//! - fstdNSIM: 各频段相似度的标准差（pooled variance）
+//! - fVDegEnergy: 各频段的降质能量
 
-use rustfft::{FftPlanner, num_complex::Complex};
 use serde::Serialize;
+
+pub use crate::gammatone::{build_spectrogram, preprocess_spectrograms};
+pub use crate::spectrogram::{evaluate_patch_similarities, NsimPatchResult};
 
 /// ViSQOL 兼容的完整质量评估结果
 #[derive(Debug, Clone, Serialize)]
 pub struct QualityResult {
-    /// MOS-LQO 分数 (1-5)
     pub moslqo: f64,
-    /// VNSIM - 神经元网络相似度 (0-1)
     pub vnsim: f64,
-    /// fVNSIM - 各频段平均相似度
     pub fvnsim: Vec<f64>,
-    /// fVNSIM10 - 各频段 10 百分位相似度
     pub fvnsim10: Vec<f64>,
-    /// fstdNSIM - 各频段相似度标准差
     pub fstdnsim: Vec<f64>,
-    /// fVDegEnergy - 各频段降质能量
     pub fvdegenergy: Vec<f64>,
-    /// 各频段中心频率 (Hz)
     pub center_freq_bands: Vec<f64>,
-    /// 各 patch 相似度详情
     pub patch_sims: Vec<PatchSimilarityResult>,
-    /// 时间对齐偏移 (秒)
     pub alignment_lag_s: f64,
 }
 
-/// 单个 patch 的相似度结果
 #[derive(Debug, Clone, Serialize)]
 pub struct PatchSimilarityResult {
-    /// 该 patch 的整体相似度
     pub similarity: f64,
-    /// 该 patch 内各频段的相似度均值
     pub freq_band_means: Vec<f64>,
-    /// 参考音频中 patch 起始时间 (秒)
     pub ref_patch_start_time: f64,
-    /// 参考音频中 patch 结束时间 (秒)
     pub ref_patch_end_time: f64,
-    /// 录制音频中 patch 起始时间 (秒)
     pub deg_patch_start_time: f64,
-    /// 录制音频中 patch 结束时间 (秒)
     pub deg_patch_end_time: f64,
 }
 
-/// 诊断结果
 #[derive(Debug, Clone, Serialize)]
 pub struct DiagnosisResult {
-    /// 总体质量评级
     pub quality_rating: String,
-    /// MOS 分数
     pub mos_score: f64,
     pub background_noise_detected: bool,
     pub high_freq_loss_detected: bool,
@@ -68,377 +50,212 @@ pub struct DiagnosisResult {
     pub freq_stability: f64,
 }
 
-// ============ 常量定义 ============
-
-// 语音模式：16kHz，帧 30ms，重叠 75%
-// 音频模式：48kHz，帧 30ms，重叠 75%
-const SPEECH_FRAME_MS: f64 = 30.0;
-const AUDIO_FRAME_MS: f64 = 30.0;
+const FRAME_DURATION_MS: f64 = 80.0;
 const FRAME_OVERLAP_RATIO: f64 = 0.75;
+const NUM_BANDS: usize = 24;
 
-// 巴克频带边界 (Hz)，用于语音和音频分析
-const BARK_BANDS: [f64; 24] = [
-    50.0, 150.0, 250.0, 350.0, 450.0, 570.0, 700.0, 840.0,
-    1000.0, 1200.0, 1450.0, 1750.0, 2100.0, 2500.0, 3000.0,
-    3600.0, 4400.0, 5400.0, 6600.0, 8000.0, 10000.0, 13000.0, 
-    17000.0, 22000.0,
-];
-
-/// 执行完整的音频质量评估（ViSQOL 兼容）
 pub fn evaluate_quality(
     reference: &[f64],
     degraded: &[f64],
     sample_rate: u32,
     use_speech_mode: bool,
 ) -> QualityResult {
-    let frame_duration = if use_speech_mode { SPEECH_FRAME_MS } else { AUDIO_FRAME_MS };
-    let hop_ratio = 1.0 - FRAME_OVERLAP_RATIO;
+    let frame_size = (sample_rate as f64 * FRAME_DURATION_MS / 1000.0) as usize;
+    let hop_size = (frame_size as f64 * FRAME_OVERLAP_RATIO) as usize;
     
-    let frame_size = (sample_rate as f64 * frame_duration / 1000.0) as usize;
-    let hop_size = (frame_size as f64 * hop_ratio) as usize;
-    
-    // 分帧并计算各 patch 的频段相��度
-    let patch_results = compute_patch_similarities(
-        reference, degraded, sample_rate, frame_size, hop_size
+    let (mut ref_spectro, center_freqs) = build_spectrogram(
+        reference, sample_rate, frame_size, hop_size, NUM_BANDS, use_speech_mode,
     );
     
-    // 汇总各频段指标
-    let num_bands = if patch_results.is_empty() {
-        BARK_BANDS.len()
-    } else {
-        patch_results[0].freq_band_means.len()
-    };
+    let (mut deg_spectro, _) = build_spectrogram(
+        degraded, sample_rate, frame_size, hop_size, NUM_BANDS, use_speech_mode,
+    );
     
-    // fVNSIM: 各频段均值
-    let fvnsim = compute_band_means(&patch_results, num_bands);
+    if ref_spectro.is_empty() || deg_spectro.is_empty() || 
+       ref_spectro[0].len() < 3 || deg_spectro[0].len() < 3 {
+        return QualityResult {
+            moslqo: 1.0, vnsim: 0.0,
+            fvnsim: vec![0.0; NUM_BANDS],
+            fvnsim10: vec![0.0; NUM_BANDS],
+            fstdnsim: vec![0.0; NUM_BANDS],
+            fvdegenergy: vec![1.0; NUM_BANDS],
+            center_freq_bands: center_freqs,
+            patch_sims: vec![],
+            alignment_lag_s: 0.0,
+        };
+    }
     
-    // fVNSIM10: 各频段 10 百分位
-    let fvnsim10 = compute_band_quantile(&patch_results, num_bands, 0.10);
+    preprocess_spectrograms(&mut ref_spectro, &mut deg_spectro, reference, degraded);
     
-    // fstdNSIM: 各频段标准差
-    let fstdnsim = compute_band_stddevs(&patch_results, &fvnsim, num_bands);
+    let patch_size_bands = NUM_BANDS;
+    let patch_size_frames = 2;
+    let hop_bands = NUM_BANDS;
+    let hop_frames = 1;
     
-    // fVDegEnergy: 各频段降质能量均值
-    let fvdegenergy = compute_band_degraded_energy(&patch_results, num_bands);
+    let nsim_results = evaluate_patch_similarities(
+        &ref_spectro, &deg_spectro,
+        patch_size_bands, patch_size_frames, hop_bands, hop_frames,
+    );
     
-    // VNSIM: 全局平均相似度
-    let vnsim = if !patch_results.is_empty() {
-        patch_results.iter().map(|p| p.similarity).sum::<f64>() 
-            / patch_results.len() as f64
-    } else {
-        0.0
-    };
+    let num_bands = NUM_BANDS;
+    let fvnsim = compute_band_means(&nsim_results, num_bands);
+    let fvnsim10 = compute_band_quantile(&nsim_results, num_bands, 0.10);
+    let fstdnsim = compute_band_pooled_stddevs(&nsim_results, num_bands);
+    let fvdegenergy = compute_band_degraded_energy(&nsim_results, num_bands);
     
-    // 中心频率
-    let center_freq_bands: Vec<f64> = BARK_BANDS.iter().take(num_bands).cloned().collect();
+    let vnsim = if !nsim_results.is_empty() {
+        nsim_results.iter().map(|r| r.similarity).sum::<f64>() / nsim_results.len() as f64
+    } else { 0.0 };
     
-    // MOS-LQO 估算（SVR 简化模型）
     let moslqo = predict_mos(&fvnsim, &fvnsim10, &fstdnsim, &fvdegenergy, vnsim);
     
+    let patch_sims: Vec<PatchSimilarityResult> = nsim_results.iter().map(|r| {
+        PatchSimilarityResult {
+            similarity: r.similarity,
+            freq_band_means: r.intensity.iter()
+                .zip(r.structure.iter())
+                .map(|(i, s)| i * s)
+                .collect(),
+            ref_patch_start_time: r.start_time_s,
+            ref_patch_end_time: r.end_time_s,
+            deg_patch_start_time: r.start_time_s,
+            deg_patch_end_time: r.end_time_s,
+        }
+    }).collect();
+    
     QualityResult {
-        moslqo,
-        vnsim,
-        fvnsim,
-        fvnsim10,
-        fstdnsim,
-        fvdegenergy,
-        center_freq_bands,
-        patch_sims: patch_results,
-        alignment_lag_s: 0.0,
+        moslqo, vnsim, fvnsim, fvnsim10, fstdnsim, fvdegenergy,
+        center_freq_bands: center_freqs, patch_sims, alignment_lag_s: 0.0,
     }
 }
 
-/// 计算每个 patch 的频段相似度
-fn compute_patch_similarities(
-    reference: &[f64],
-    degraded: &[f64],
-    sample_rate: u32,
-    frame_size: usize,
-    hop_size: usize,
-) -> Vec<PatchSimilarityResult> {
-    let mut results = Vec::new();
-    
-    let mut planner = FftPlanner::new();
-    let fft_size = frame_size.next_power_of_two();
-    let fft = planner.plan_fft_forward(fft_size);
-    
-    let freq_resolution = sample_rate as f64 / fft_size as f64;
-    
-    // 滑动窗口遍历
-    let mut pos = 0;
-    while pos + frame_size <= reference.len() && pos + frame_size <= degraded.len() {
-        let ref_frame = &reference[pos..pos + frame_size];
-        let deg_frame = &degraded[pos..pos + frame_size];
-        
-        // FFT
-        let mut ref_fft: Vec<Complex<f64>> = ref_frame.iter()
-            .map(|&x| Complex::new(x, 0.0))
-            .chain(std::iter::repeat(Complex::new(0.0, 0.0)))
-            .take(fft_size)
-            .collect();
-        let mut deg_fft: Vec<Complex<f64>> = deg_frame.iter()
-            .map(|&x| Complex::new(x, 0.0))
-            .chain(std::iter::repeat(Complex::new(0.0, 0.0)))
-            .take(fft_size)
-            .collect();
-        
-        fft.process(&mut ref_fft);
-        fft.process(&mut deg_fft);
-        
-        // 幅度谱
-        let ref_mag: Vec<f64> = ref_fft.iter().take(fft_size/2).map(|c| c.norm()).collect();
-        let deg_mag: Vec<f64> = deg_fft.iter().take(fft_size/2).map(|c| c.norm()).collect();
-        
-        // 归一化能量用于后续计算
-        let ref_energy = ref_mag.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-10);
-        let deg_energy = deg_mag.iter().map(|x| x * x).sum::<f64>().sqrt().max(1e-10);
-        let norm_ref: Vec<f64> = ref_mag.iter().map(|x| x / ref_energy).collect();
-        let norm_deg: Vec<f64> = deg_mag.iter().map(|x| x / deg_energy).collect();
-        
-        // 计算各巴克频段的 NSIM
-        let mut band_sims = Vec::new();
-        for band_edge in BARK_BANDS.windows(2) {
-            let low_bin = (band_edge[0] / freq_resolution).ceil() as usize;
-            let high_bin = (band_edge[1] / freq_resolution).ceil() as usize;
-            let low_bin = low_bin.max(1);
-            let high_bin = high_bin.min(ref_mag.len().saturating_sub(1)).max(low_bin + 1);
-            
-            // 该频段内的频谱相似度（归一化互相关）
-            let mut dot = 0.0;
-            let mut ref_e = 0.0;
-            let mut deg_e = 0.0;
-            for i in low_bin..high_bin {
-                dot += norm_ref[i] * norm_deg[i];
-                ref_e += norm_ref[i] * norm_ref[i];
-                deg_e += norm_deg[i] * norm_deg[i];
-            }
-            
-            let sim = if ref_e > 0.0 && deg_e > 0.0 {
-                dot / (ref_e.sqrt() * deg_e.sqrt())
-            } else {
-                0.0
-            };
-            band_sims.push(sim.clamp(0.0, 1.0));
-        }
-        
-        let patch_similarity = band_sims.iter().sum::<f64>() / band_sims.len() as f64;
-        
-        // 降质能量（各频段能量比值）
-        let mut band_energy = Vec::new();
-        for band_edge in BARK_BANDS.windows(2) {
-            let low_bin = (band_edge[0] / freq_resolution).ceil() as usize;
-            let high_bin = (band_edge[1] / freq_resolution).ceil() as usize;
-            let low_bin = low_bin.max(1);
-            let high_bin = high_bin.min(ref_mag.len().saturating_sub(1)).max(low_bin + 1);
-            
-            let ref_band_e: f64 = ref_mag[low_bin..high_bin].iter().map(|x| x*x).sum();
-            let deg_band_e: f64 = deg_mag[low_bin..high_bin].iter().map(|x| x*x).sum();
-            
-            // 能量比值（相对值）
-            let ratio = if ref_band_e > 1e-10 {
-                (deg_band_e / ref_band_e).min(10.0)
-            } else {
-                1.0
-            };
-            band_energy.push(ratio);
-        }
-        
-        let start_time = pos as f64 / sample_rate as f64;
-        let end_time = (pos + frame_size) as f64 / sample_rate as f64;
-        
-        results.push(PatchSimilarityResult {
-            similarity: patch_similarity,
-            freq_band_means: band_sims,
-            ref_patch_start_time: start_time,
-            ref_patch_end_time: end_time,
-            deg_patch_start_time: start_time,
-            deg_patch_end_time: end_time,
-        });
-        
-        pos += hop_size;
-    }
-    
-    results
-}
-
-/// 计算各频段的均值
-fn compute_band_means(patches: &[PatchSimilarityResult], num_bands: usize) -> Vec<f64> {
-    if patches.is_empty() {
-        return vec![0.0; num_bands];
-    }
-    
+fn compute_band_means(patches: &[NsimPatchResult], num_bands: usize) -> Vec<f64> {
+    if patches.is_empty() { return vec![0.0; num_bands]; }
     let mut means = vec![0.0; num_bands];
     for patch in patches {
-        for (i, &sim) in patch.freq_band_means.iter().enumerate() {
-            if i < num_bands {
-                means[i] += sim;
+        for (i, intensity) in patch.intensity.iter().enumerate() {
+            if i < num_bands && i < patch.structure.len() {
+                means[i] += intensity * patch.structure[i];
             }
         }
     }
-    for m in &mut means {
-        *m /= patches.len() as f64;
-    }
+    for m in &mut means { *m /= patches.len() as f64; }
     means
 }
 
-/// 计算各频段的百分位数
-fn compute_band_quantile(patches: &[PatchSimilarityResult], num_bands: usize, quantile: f64) -> Vec<f64> {
-    if patches.is_empty() {
-        return vec![0.0; num_bands];
-    }
-    
+fn compute_band_quantile(patches: &[NsimPatchResult], num_bands: usize, quantile: f64) -> Vec<f64> {
+    if patches.is_empty() { return vec![0.0; num_bands]; }
     let mut result = Vec::with_capacity(num_bands);
-    
     for band_idx in 0..num_bands {
         let mut band_values: Vec<f64> = patches.iter()
-            .filter_map(|p| p.freq_band_means.get(band_idx).copied())
+            .filter_map(|p| {
+                if band_idx < p.intensity.len() && band_idx < p.structure.len() {
+                    Some(p.intensity[band_idx] * p.structure[band_idx])
+                } else { None }
+            })
             .collect();
-        
-        if band_values.is_empty() {
-            result.push(0.0);
-            continue;
-        }
-        
+        if band_values.is_empty() { result.push(0.0); continue; }
         band_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let quantile_idx = (((band_values.len() as f64) * quantile).ceil() as usize)
-            .min(band_values.len() - 1);
-        result.push(band_values[quantile_idx]);
+        let idx = (((band_values.len() as f64) * quantile).ceil() as usize)
+            .min(band_values.len().saturating_sub(1));
+        result.push(band_values[idx]);
     }
-    
     result
 }
 
-/// 计算各频段的标准差
-fn compute_band_stddevs(patches: &[PatchSimilarityResult], means: &[f64], num_bands: usize) -> Vec<f64> {
-    if patches.is_empty() {
-        return vec![0.0; num_bands];
+fn compute_band_pooled_stddevs(patches: &[NsimPatchResult], num_bands: usize) -> Vec<f64> {
+    if patches.is_empty() { return vec![0.0; num_bands]; }
+    let mut global_means = vec![0.0; num_bands];
+    for patch in patches {
+        for (i, intensity) in patch.intensity.iter().enumerate() {
+            if i < num_bands && i < patch.structure.len() {
+                global_means[i] += intensity * patch.structure[i];
+            }
+        }
     }
+    for m in &mut global_means { *m /= patches.len() as f64; }
     
     let n = patches.len() as f64;
-    let mut variances = vec![0.0; num_bands];
-    
+    let mut contribution = vec![0.0; num_bands];
     for patch in patches {
-        for (i, &sim) in patch.freq_band_means.iter().enumerate() {
-            if i < num_bands && i < means.len() {
-                variances[i] += (sim - means[i]).powi(2);
+        for (i, intensity) in patch.intensity.iter().enumerate() {
+            if i < num_bands && i < patch.structure.len() && i < patch.freq_band_stddevs.len() {
+                let mean = global_means[i];
+                let stddev = patch.freq_band_stddevs[i];
+                contribution[i] += (stddev * stddev) + (mean * mean);
             }
         }
     }
     
-    variances.iter().map(|v| (v / n).sqrt()).collect()
-}
-
-/// 计算各频段的降质能量均值
-fn compute_band_degraded_energy(patches: &[PatchSimilarityResult], num_bands: usize) -> Vec<f64> {
-    // 注意：这里简化处理，实际 ViSQOL 有更复杂的能量计算
-    // 我们用 1.0 作为基准值表示无能量差异
-    if patches.is_empty() {
-        return vec![1.0; num_bands];
+    let mut result = Vec::with_capacity(num_bands);
+    for i in 0..num_bands {
+        let variance: f64 = (contribution[i] - n * global_means[i] * global_means[i]) / (n - 1.0);
+        result.push(if variance > 0.0 { variance.sqrt() } else { 0.0 });
     }
-    
-    // 返回每帧能量比的均值
-    vec![1.0; num_bands]
+    result
 }
 
-/// 使用简化的 SVR 模型预测 MOS-LQO
-fn predict_mos(
-    fvnsim: &[f64],
-    fvnsim10: &[f64],
-    fstdnsim: &[f64],
-    _fvdegenergy: &[f64],
-    vnsim: f64,
-) -> f64 {
-    // ViSQOL 使用 SVR 从这些特征预测 MOS
-    // 这里使用简化的线性组合模型（基于 ViSQOL 论文的回归分析）
-    
-    // 1. 全局相似度贡献（最重要）
+fn compute_band_degraded_energy(patches: &[NsimPatchResult], num_bands: usize) -> Vec<f64> {
+    if patches.is_empty() { return vec![1.0; num_bands]; }
+    let mut energy_sums = vec![0.0; num_bands];
+    for patch in patches {
+        for (i, &energy) in patch.degraded_energy.iter().enumerate() {
+            if i < num_bands { energy_sums[i] += energy; }
+        }
+    }
+    for e in &mut energy_sums { *e /= patches.len() as f64; }
+    energy_sums
+}
+
+fn predict_mos(fvnsim: &[f64], fvnsim10: &[f64], fstdnsim: &[f64], fvdegenergy: &[f64], vnsim: f64) -> f64 {
     let sim_contrib = 1.0 + vnsim * 3.5;
-    
-    // 2. 低分段惩罚（10 百分位比均值低说明有局部劣化）
     let mut low_score_penalty = 0.0;
     if !fvnsim.is_empty() && !fvnsim10.is_empty() {
         for (mean, p10) in fvnsim.iter().zip(fvnsim10.iter()) {
-            if *p10 < *mean * 0.7 {
-                low_score_penalty += (*mean - *p10) * 0.5;
-            }
+            if *p10 < *mean * 0.7 { low_score_penalty += (*mean - *p10) * 0.5; }
         }
     }
-    
-    // 3. 不稳定性惩罚（标准差大说明质量波动���
     let mut instability_penalty = 0.0;
-    for std in fstdnsim.iter().take(5) {  // 重点关注低频段稳定性
-        instability_penalty += std * 0.3;
+    for std in fstdnsim.iter().take(5) { instability_penalty += std * 0.3; }
+    let mut energy_penalty = 0.0;
+    for energy in fvdegenergy.iter().take(5) {
+        let deviation = (energy - 1.0).abs();
+        if deviation > 0.5 { energy_penalty += deviation * 0.2; }
     }
-    
-    let mos = sim_contrib - low_score_penalty - instability_penalty;
-    
-    // 极端情况处理（与 ViSQOL 逻辑一致）
-    let mos = if vnsim < 0.15 {
-        1.0  // 完全不同音频直接给最低分
-    } else {
-        mos.clamp(1.0, 5.0)
-    };
-    
-    mos
+    let mos = sim_contrib - low_score_penalty - instability_penalty - energy_penalty;
+    if vnsim < 0.15 { return 1.0; }
+    mos.clamp(1.0, 5.0)
 }
 
-/// 诊断分析
 pub fn diagnose(result: &QualityResult) -> DiagnosisResult {
     let quality_rating = match result.moslqo {
-        s if s >= 4.5 => "优秀".to_string(),
-        s if s >= 4.0 => "良好".to_string(),
-        s if s >= 3.5 => "一般".to_string(),
-        s if s >= 3.0 => "较差".to_string(),
-        s if s >= 2.0 => "差".to_string(),
-        _ => "极差".to_string(),
-    };
+        s if s >= 4.5 => "优秀", s if s >= 4.0 => "良好", s if s >= 3.5 => "一般",
+        s if s >= 3.0 => "较差", s if s >= 2.0 => "差", _ => "极差",
+    }.to_string();
     
     let low_count = (result.fvnsim.len() / 3).max(1);
     let high_count = result.fvnsim.len().saturating_sub(result.fvnsim.len() * 2 / 3);
-    
-    let low_freq_similarity = result.fvnsim.iter().take(low_count)
-        .sum::<f64>() / low_count as f64;
+    let low_freq_similarity = result.fvnsim.iter().take(low_count).sum::<f64>() / low_count as f64;
     let high_freq_similarity = if high_count > 0 {
-        result.fvnsim.iter().rev().take(high_count)
-            .sum::<f64>() / high_count as f64
-    } else {
-        result.vnsim
-    };
+        result.fvnsim.iter().rev().take(high_count).sum::<f64>() / high_count as f64
+    } else { result.vnsim };
     
     let background_noise_detected = result.vnsim < 0.85 && low_freq_similarity < 0.80;
-    let high_freq_loss_detected = high_freq_similarity < low_freq_similarity * 0.8
-        && high_freq_similarity < 0.75;
-    
+    let high_freq_loss_detected = high_freq_similarity < low_freq_similarity * 0.8 && high_freq_similarity < 0.75;
     let worst_patch = result.patch_sims.iter()
         .min_by(|a, b| a.similarity.partial_cmp(&b.similarity).unwrap_or(std::cmp::Ordering::Equal))
         .map(|p| (p.similarity, p.ref_patch_start_time, p.ref_patch_end_time));
-    
     let avg_sim = if !result.patch_sims.is_empty() {
-        result.patch_sims.iter().map(|p| p.similarity).sum::<f64>() 
-            / result.patch_sims.len() as f64
-    } else {
-        result.vnsim
-    };
-    
-    let intermittent_artifacts_detected = worst_patch
-        .map(|(sim, _, _)| sim < avg_sim * 0.7)
-        .unwrap_or(false);
-    
+        result.patch_sims.iter().map(|p| p.similarity).sum::<f64>() / result.patch_sims.len() as f64
+    } else { result.vnsim };
+    let intermittent_artifacts_detected = worst_patch.map(|(sim, _, _)| sim < avg_sim * 0.7).unwrap_or(false);
     let freq_stability = if !result.fstdnsim.is_empty() {
         result.fstdnsim.iter().sum::<f64>() / result.fstdnsim.len() as f64
-    } else {
-        0.0
-    };
+    } else { 0.0 };
     
     DiagnosisResult {
-        quality_rating,
-        mos_score: result.moslqo,
-        background_noise_detected,
-        high_freq_loss_detected,
-        intermittent_artifacts_detected,
-        low_freq_similarity,
-        high_freq_similarity,
-        worst_patch,
-        freq_stability,
+        quality_rating, mos_score: result.moslqo,
+        background_noise_detected, high_freq_loss_detected, intermittent_artifacts_detected,
+        low_freq_similarity, high_freq_similarity, worst_patch, freq_stability,
     }
 }

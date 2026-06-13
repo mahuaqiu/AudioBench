@@ -60,11 +60,10 @@ pub fn find_alignment(
     let scale = 1.0 / n as f64;
     let xcorr: Vec<f64> = product.iter().map(|c| (c.re * scale).abs()).collect();
 
-    // 计算参考和录制信号的能量，用于归一化置信度
+    // 计算参考信号的能量，用于归一化置信度
     let ref_energy: f64 = reference.iter().map(|x| x * x).sum::<f64>().sqrt();
     
     // 在有效搜索范围内寻找峰值
-    // 搜索范围：0 到 degraded_len - ref_len（参考信号不能超出录制信号尾部）
     let max_search = deg_len.saturating_sub(ref_len);
     let (peak_idx, peak_val) = xcorr[..=max_search]
         .iter()
@@ -85,17 +84,4 @@ pub fn find_alignment(
         delay_ms: peak_idx as f64 / sample_rate as f64 * 1000.0,
         confidence,
     }
-}
-
-/// 从录制音频中截取与参考音频等长的片段（基于对齐偏移）
-pub fn extract_aligned_segment(
-    degraded: &[f64],
-    offset: usize,
-    ref_len: usize,
-) -> Vec<f64> {
-    let end = (offset + ref_len).min(degraded.len());
-    let mut segment = degraded[offset..end].to_vec();
-    // 如果录制音频不够长，补零
-    segment.resize(ref_len, 0.0);
-    segment
 }

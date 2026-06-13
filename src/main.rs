@@ -1,6 +1,7 @@
 //! AudioBench - 会议音频质量评估工具
 //! 
 //! 纯 Rust 实现，无需外部 ViSQOL 依赖，单 EXE 运行。
+//! 使用 Gammatone 滤波器组 + NSIM 类 SSIM 算法，与 ViSQOL 指标准确对齐。
 //! 
 //! 使用方法:
 //!   audio_bench --reference ref.wav --recorded rec.wav
@@ -12,7 +13,9 @@
 mod alignment;
 mod audio_io;
 mod metrics;
+mod gammatone;
 mod quality;
+mod spectrogram;
 mod report;
 
 use clap::Parser;
@@ -27,7 +30,7 @@ struct Args {
     #[clap(long = "reference", short = 'r', required = true)]
     reference: PathBuf,
 
-    /// 录制音频文件路径（WAV 格式）
+    /// 录制���频文件路径（WAV 格式）
     #[clap(long = "recorded", short = 'c', required = true)]
     recorded: PathBuf,
 
@@ -97,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aligned_start = align_result.offset_samples;
     let available_len = rec_len.saturating_sub(aligned_start);
     
-    // 计算分段数量
+    // 计算分段数��
     let num_segments = if available_len >= ref_len {
         (available_len as f64 / ref_len as f64).ceil() as usize
     } else {

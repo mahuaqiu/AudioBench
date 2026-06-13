@@ -1,10 +1,7 @@
 //! 音频加载与预处理模块
 //! 负责 WAV 解码、重采样（线性插值）、单声道化
-//! 
-//! 注意：为了简化依赖，高质量重采样需要用户自行处理（如使用 ffmpeg）
-//! 本模块提供简单的线性插值重采样，仅适用于采样率差异不大的情况
 
-use hound::{WavReader, WavWriter, SampleFormat};
+use hound::{WavReader, SampleFormat};
 use std::path::Path;
 
 /// 简单的线性插值重采样
@@ -95,36 +92,12 @@ impl AudioData {
             });
         }
 
-        // 使用简单的线性插值重采样
-        // 注意：对高品质音频，建议使用 ffmpeg 预先重采样
         let output = linear_resample(&self.samples, self.sample_rate, target_rate);
 
         Ok(AudioData {
             samples: output,
             sample_rate: target_rate,
         })
-    }
-
-    /// 保存为 WAV 文件（16bit PCM）
-    pub fn save_wav(&self, path: &Path) -> Result<(), String> {
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: self.sample_rate,
-            bits_per_sample: 16,
-            sample_format: SampleFormat::Int,
-        };
-        let mut writer = WavWriter::create(path, spec)
-            .map_err(|e| format!("无法创建 WAV 文件 {:?}: {}", path, e))?;
-
-        for &s in &self.samples {
-            let val = (s.clamp(-1.0, 1.0) * 32767.0) as i16;
-            writer.write_sample(val)
-                .map_err(|e| format!("写入采样失败: {}", e))?;
-        }
-
-        writer.finalize()
-            .map_err(|e| format!("写入 WAV 失败: {}", e))?;
-        Ok(())
     }
 
     /// 音频时长（秒）
