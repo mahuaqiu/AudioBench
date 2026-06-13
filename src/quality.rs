@@ -58,17 +58,17 @@ pub fn evaluate_quality(
     reference: &[f64],
     degraded: &[f64],
     sample_rate: u32,
-    use_speech_mode: bool,
+    
 ) -> QualityResult {
     let frame_size = (sample_rate as f64 * FRAME_DURATION_MS / 1000.0) as usize;
     let hop_size = (frame_size as f64 * FRAME_OVERLAP_RATIO) as usize;
     
     let (mut ref_spectro, center_freqs) = build_spectrogram(
-        reference, sample_rate, frame_size, hop_size, NUM_BANDS, use_speech_mode,
+        reference, sample_rate, frame_size, hop_size, NUM_BANDS, 
     );
     
     let (mut deg_spectro, _) = build_spectrogram(
-        degraded, sample_rate, frame_size, hop_size, NUM_BANDS, use_speech_mode,
+        degraded, sample_rate, frame_size, hop_size, NUM_BANDS, 
     );
     
     if ref_spectro.is_empty() || deg_spectro.is_empty() || 

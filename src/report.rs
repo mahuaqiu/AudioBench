@@ -15,8 +15,6 @@ pub struct ReportConfig {
     pub recorded_path: String,
     /// 目标采样率
     pub target_sample_rate: u32,
-    /// 是否使用语音模式
-    pub speech_mode: bool,
 }
 
 /// 对齐信息
@@ -191,7 +189,7 @@ pub fn print_console_report(report: &EvaluationReport) {
              report.reference_duration_s, report.recorded_duration_s);
     println!("  采样率: {} Hz, 模式: {}", 
              report.config.target_sample_rate,
-             if report.config.speech_mode { "语音" } else { "音频" });
+             format!("{} Hz", report.config.target_sample_rate));
 
     // 对齐信息
     println!("\n【时间对齐】");

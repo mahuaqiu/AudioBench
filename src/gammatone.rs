@@ -127,9 +127,9 @@ pub fn build_spectrogram(
     frame_size: usize,
     hop_size: usize,
     num_bands: usize,
-    use_speech_mode: bool,
+    
 ) -> (Vec<Vec<f64>>, Vec<f64>) {
-    let max_freq = if use_speech_mode { 8000.0 } else { sample_rate as f64 / 2.0 };
+    let max_freq = sample_rate as f64 / 2.0;
     let min_freq = 50.0;
     
     let filter = make_gammatone_filters(sample_rate, num_bands, min_freq, max_freq);

@@ -30,7 +30,7 @@ struct Args {
     #[clap(long = "reference", short = 'r', required = true)]
     reference: PathBuf,
 
-    /// 录制���频文件路径（WAV 格式）
+    /// 录制音频文件路径（WAV 格式）
     #[clap(long = "recorded", short = 'c', required = true)]
     recorded: PathBuf,
 
@@ -38,9 +38,6 @@ struct Args {
     #[clap(long = "sample-rate", short = 's', default_value = "48000")]
     sample_rate: u32,
 
-    /// 使用语音模式（推荐语音音频用这个，16kHz）
-    #[clap(long = "speech", conflicts_with = "sample_rate")]
-    speech_mode: bool,
 
     /// 输出 JSON 报告文件路径（可选）
     #[clap(long = "output", short = 'o')]
@@ -58,14 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("录制音频文件不存在: {:?}", args.recorded).into());
     }
     
-    // 确定采样率和工作模式
-    let (target_sample_rate, use_speech_mode) = if args.speech_mode {
-        (16000, true)
-    } else {
-        (args.sample_rate, false)
-    };
-    
-    // 加载并预处理音频
+    // 加载音频（保留原始采样率）
     println!("[*] 加载参考音频: {:?}", args.reference);
     let mut ref_audio = audio_io::AudioData::from_wav(&args.reference)?;
     println!("      原始采样率: {}, 时长: {:.2}s", 
@@ -76,10 +66,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("      原始采样率: {}, 时长: {:.2}s", 
              rec_audio.sample_rate, rec_audio.duration_secs());
     
-    // 重采样
-    ref_audio = ref_audio.resample(target_sample_rate)?;
-    rec_audio = rec_audio.resample(target_sample_rate)?;
-    println!("[*] 重采样到 {} Hz", target_sample_rate);
+    // 确定目标采样率：用户指定则使用用户指定的，否则使用输入文件的采样率
+    let target_sample_rate = if args.sample_rate > 0 {
+        args.sample_rate
+    } else {
+        ref_audio.sample_rate
+    };
+
+    // 采样率不同时发出警告
+    if ref_audio.sample_rate != rec_audio.sample_rate {
+        println!("[!] 警告: 参考采样率 {} Hz，录制采样率 {} Hz，将统一到 {} Hz",
+                 ref_audio.sample_rate, rec_audio.sample_rate, target_sample_rate);
+    }
+    
+    // 仅当目标采样率与输入不同时才重采样
+    let needs_resample = ref_audio.sample_rate != target_sample_rate 
+        || rec_audio.sample_rate != target_sample_rate;
+    if needs_resample {
+        ref_audio = ref_audio.resample(target_sample_rate)?;
+        rec_audio = rec_audio.resample(target_sample_rate)?;
+        println!("[*] 重采样到 {} Hz", target_sample_rate);
+    } else {
+        println!("[*] 使用原始采样率 {} Hz", target_sample_rate);
+    }
     
     // 全局对齐：定位参考首次出现位置（作为第 0 段的预期起点）
     println!("[*] 执行全局信号对齐...");
@@ -169,7 +178,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &seg_ref_samples,
             &seg_degraded,
             target_sample_rate,
-            use_speech_mode,
         );
 
         // SNR
@@ -211,7 +219,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             reference_path: args.reference.to_string_lossy().to_string(),
             recorded_path: args.recorded.to_string_lossy().to_string(),
             target_sample_rate,
-            speech_mode: use_speech_mode,
+            
         },
         report::AlignmentInfo {
             offset_samples: align_result.offset_samples,
