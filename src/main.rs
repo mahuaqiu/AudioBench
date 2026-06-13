@@ -1,4 +1,4 @@
-//! AudioBench - 会议音频质量评估工具
+//! AudioBench - 音频质量评估工具
 //! 
 //! 纯 Rust 实现，无需外部 ViSQOL 依赖，单 EXE 运行。
 //! 使用 Gammatone 滤波器组 + NSIM 类 SSIM 算法，与 ViSQOL 指标准确对齐。
@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 /// 命令行参数
 #[derive(Parser, Debug)]
-#[clap(name = "audio_bench", version = "0.1.0", about = "会议音频质量评估工具")]
+#[clap(name = "audio_bench", version = "0.1.0", about = "音频质量评估工具")]
 struct Args {
     /// 参考音频文件路径（WAV 格式）
     #[clap(long = "reference", short = 'r', required = true)]
@@ -38,7 +38,7 @@ struct Args {
     #[clap(long = "sample-rate", short = 's', default_value = "48000")]
     sample_rate: u32,
 
-    /// 使用语音模式（推荐会议音频用这个，16kHz）
+    /// 使用语音模式（推荐语音音频用这个，16kHz）
     #[clap(long = "speech", conflicts_with = "sample_rate")]
     speech_mode: bool,
 
