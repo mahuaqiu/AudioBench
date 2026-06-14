@@ -5,6 +5,7 @@ use hound::{WavReader, SampleFormat};
 use std::path::Path;
 
 /// 简单的线性插值重采样
+#[allow(dead_code)]
 fn linear_resample(samples: &[f64], from_rate: u32, to_rate: u32) -> Vec<f64> {
     if from_rate == to_rate {
         return samples.to_vec();
@@ -84,6 +85,7 @@ impl AudioData {
     }
 
     /// 重采样到目标采样率
+    #[allow(dead_code)]
     pub fn resample(&self, target_rate: u32) -> Result<Self, String> {
         if self.sample_rate == target_rate {
             return Ok(AudioData {
@@ -104,4 +106,31 @@ impl AudioData {
     pub fn duration_secs(&self) -> f64 {
         self.samples.len() as f64 / self.sample_rate as f64
     }
+}
+
+/// 写入单声道 WAV 文件（供 visqol 调用）
+pub fn write_wav_mono(path: &std::path::Path, samples: &[f64], sample_rate: u32) -> Result<(), String> {
+    use hound::{WavWriter, WavSpec, SampleFormat};
+    
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
+    };
+    
+    let mut writer = WavWriter::create(path, spec)
+        .map_err(|e| format!("创建 WAV 文件失败: {}", e))?;
+    
+    let max_val = 32767.0f64;
+    for &sample in samples {
+        let s = (sample * max_val).clamp(-32768.0, 32767.0) as i32;
+        writer.write_sample(s)
+            .map_err(|e| format!("写入采样失败: {}", e))?;
+    }
+    
+    writer.finalize()
+        .map_err(|e| format!("关闭 WAV 文件失败: {}", e))?;
+    
+    Ok(())
 }

@@ -4,7 +4,8 @@
 
 use serde::Serialize;
 use crate::metrics::{DropoutResult, LevelResult, SnrResult};
-use crate::quality::{DiagnosisResult, QualityResult};
+use crate::visqol::VisqolResult as QualityResult;
+
 
 /// 评估配置信息
 #[derive(Debug, Serialize)]
@@ -39,6 +40,7 @@ pub struct SegmentResult {
     pub end_time_s: f64,
     /// 质量评估结果（ViSQOL 兼容指标）
     pub quality: QualityResult,
+    /// 诊断结果
     /// SNR 结果
     pub snr: SnrResult,
     /// 卡顿检测结果
@@ -272,4 +274,18 @@ pub fn print_console_report(report: &EvaluationReport) {
     }
 
     println!("\n{}", "=".repeat(60));
+}
+
+/// 诊断结果
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosisResult {
+    pub quality_rating: String,
+    pub mos_score: f64,
+    pub background_noise_detected: bool,
+    pub high_freq_loss_detected: bool,
+    pub intermittent_artifacts_detected: bool,
+    pub low_freq_similarity: f64,
+    pub high_freq_similarity: f64,
+    pub worst_patch: Option<(f64, f64, f64)>,
+    pub freq_stability: f64,
 }

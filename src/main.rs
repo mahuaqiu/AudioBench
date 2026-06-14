@@ -1,22 +1,15 @@
 //! AudioBench - 音频质量评估工具
 //! 
-//! 纯 Rust 实现，无需外部 ViSQOL 依赖，单 EXE 运行。
-//! 使用 Gammatone 滤波器组 + NSIM 类 SSIM 算法，与 ViSQOL 指标准确对齐。
-//! 
+//! 集成官方 ViSQOL 进行音频质量评估，单 EXE 运行。
 //! 使用方法:
 //!   audio_bench --reference ref.wav --recorded rec.wav
-//!
-//! 分段评估:
-//!   当录制音频中参考音频不规则出现多次时，使用多峰检测自动发现所有出现位置，
-//!   每段独立评分，并汇总整体统计。
+//! 
+//! 需要设置 VISQOL_PATH 环境变量指向 visqol 二进制文件
 
 mod alignment;
 mod audio_io;
 mod metrics;
-mod gammatone;
-mod quality;
-mod spectrogram;
-mod dtw;
+mod visqol;
 mod report;
 
 use clap::Parser;
@@ -35,9 +28,9 @@ struct Args {
     #[clap(long = "recorded", short = 'c', required = true)]
     recorded: PathBuf,
 
-    /// 目标采样率（默认使用输入文件采样率）
-    #[clap(long = "sample-rate", short = 's', default_value = "0")]
-    sample_rate: u32,
+    /// visqol 二进制文件路径（可选，默认从环境变量 VISQOL_PATH 读取）
+    #[clap(long = "visqol-path")]
+    visqol_path: Option<PathBuf>,
 
     /// 输出 JSON 报告文件路径（可选）
     #[clap(long = "output", short = 'o')]
@@ -55,43 +48,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("录制音频文件不存在: {:?}", args.recorded).into());
     }
     
-    // 加载音频（保留原始采样率）
+    // 获取 visqol 路径
+    let visqol_path = match visqol::get_visqol_path(args.visqol_path.as_deref()) {
+        Ok(p) => p,
+        Err(e) => return Err(format!("{}\n提示: 请从 Windows 编译 visqol.exe 并设置 VISQOL_PATH 环境变量", e).into()),
+    };
+    
+    println!("[*] ViSQOL 路径: {:?}", visqol_path);
     println!("[*] 加载参考音频: {:?}", args.reference);
-    let mut ref_audio = audio_io::AudioData::from_wav(&args.reference)?;
+    let ref_audio = audio_io::AudioData::from_wav(&args.reference)?;
     println!("      原始采样率: {}, 时长: {:.2}s", 
              ref_audio.sample_rate, ref_audio.duration_secs());
     
     println!("[*] 加载录制音频: {:?}", args.recorded);
-    let mut rec_audio = audio_io::AudioData::from_wav(&args.recorded)?;
+    let rec_audio = audio_io::AudioData::from_wav(&args.recorded)?;
     println!("      原始采样率: {}, 时长: {:.2}s", 
              rec_audio.sample_rate, rec_audio.duration_secs());
     
-    // 确定目标采样率
-    let target_sample_rate = if args.sample_rate > 0 {
-        args.sample_rate
-    } else {
-        ref_audio.sample_rate
-    };
-
-    // 采样率不同时发出警告
-    if ref_audio.sample_rate != rec_audio.sample_rate {
-        println!("[!] 警告: 参考采样率 {} Hz，录制采样率 {} Hz，将统一到 {} Hz",
-                 ref_audio.sample_rate, rec_audio.sample_rate, target_sample_rate);
-    }
-    
-    // 仅当目标采样率与输入不同时才重采样
-    let needs_resample = ref_audio.sample_rate != target_sample_rate 
-        || rec_audio.sample_rate != target_sample_rate;
-    if needs_resample {
-        ref_audio = ref_audio.resample(target_sample_rate)?;
-        rec_audio = rec_audio.resample(target_sample_rate)?;
-        println!("[*] 重采样到 {} Hz", target_sample_rate);
-    } else {
-        println!("[*] 使用原始采样率 {} Hz", target_sample_rate);
-    }
-    
-    let ref_len = ref_audio.samples.len();
-    let rec_len = rec_audio.samples.len();
     let ref_duration = ref_audio.duration_secs();
     let rec_duration = rec_audio.duration_secs();
     
@@ -100,8 +73,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let alignment_peaks = alignment::find_all_alignments(
         &ref_audio.samples,
         &rec_audio.samples,
-        target_sample_rate,
-        0.3,  // 置信度阈值：低于 0.3 的峰被过滤
+        ref_audio.sample_rate,
+        0.3,  // 置信度阈值
     );
     
     let num_segments = alignment_peaks.len();
@@ -119,22 +92,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut segment_results = Vec::with_capacity(num_segments);
 
-    for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
-        let seg_start = seg_align.offset_samples.min(rec_len);
-        let seg_end = (seg_start + ref_len).min(rec_len);
+    // 判定使用语音模式还是音频模式
+    let use_speech_mode = ref_audio.sample_rate == 16000;
 
-        // 记录该段实际补零长度，供卡顿检测排除补零尾段使用
-        let real_len = seg_end.saturating_sub(seg_start);
-        let padded_len = ref_len.saturating_sub(real_len);
+    for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
+        let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
+        let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
 
         let mut seg_degraded = rec_audio.samples[seg_start..seg_end].to_vec();
         // 不足参考长度的末尾补零
-        seg_degraded.resize(ref_len, 0.0);
+        seg_degraded.resize(ref_audio.samples.len(), 0.0);
 
-        let seg_ref_samples = ref_audio.samples.clone();
-
-        let seg_start_time = seg_start as f64 / target_sample_rate as f64;
-        let seg_end_time = seg_end as f64 / target_sample_rate as f64;
+        let seg_start_time = seg_start as f64 / ref_audio.sample_rate as f64;
+        let seg_end_time = seg_end as f64 / ref_audio.sample_rate as f64;
 
         println!(
             "[*] 评估第 {}/{} 段 ({:.2}s - {:.2}s, 置信度 {:.1}%)...",
@@ -145,38 +115,55 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             seg_align.confidence * 100.0
         );
 
-        // 质量评估（ViSQOL 兼容指标）
-        let quality_result = quality::evaluate_quality(
-            &seg_ref_samples,
-            &seg_degraded,
-            target_sample_rate,
-        );
+        // 创建临时文件用于 visqol 对比
+        let temp_dir = std::env::temp_dir();
+        let ref_temp = temp_dir.join("audiobench_ref.wav");
+        let deg_temp = temp_dir.join("audiobench_deg.wav");
+
+        // 写入临时 WAV 文件
+        audio_io::write_wav_mono(&ref_temp, &ref_audio.samples, ref_audio.sample_rate)?;
+        audio_io::write_wav_mono(&deg_temp, &seg_degraded, ref_audio.sample_rate)?;
+
+        // 调用 visqol 进行评估
+        let visqol_result = visqol::evaluate_with_visqol(
+            &visqol_path,
+            &ref_temp,
+            &deg_temp,
+            use_speech_mode,
+        )?;
+
+        println!("      MOS-LQO: {:.2}, VNSIM: {:.4}", 
+                 visqol_result.moslqo, visqol_result.vnsim);
 
         // SNR
-        let snr = metrics::compute_snr(&seg_ref_samples, &seg_degraded);
+        let snr = metrics::compute_snr(&ref_audio.samples, &seg_degraded);
 
-        // 卡顿检测（排除补零尾段）
+        // 卡顿检测
         let dropouts = metrics::detect_dropouts(
-            &seg_ref_samples,
+            &ref_audio.samples,
             &seg_degraded,
-            target_sample_rate,
+            ref_audio.sample_rate,
             0.005,
             20.0,
-            padded_len,
+            0,
         );
 
         // 幅值统计
-        let level_ref = metrics::compute_level_stats(&seg_ref_samples);
+        let level_ref = metrics::compute_level_stats(&ref_audio.samples);
         let level_deg = metrics::compute_level_stats(&seg_degraded);
 
         // 诊断
-        let diagnosis = quality::diagnose(&quality_result);
+        let diagnosis = diagnose_from_visqol(&visqol_result);
+
+        // 清理临时文件
+        let _ = fs::remove_file(&ref_temp);
+        let _ = fs::remove_file(&deg_temp);
 
         segment_results.push(report::SegmentResult {
             segment_index: seg_idx,
             start_time_s: seg_start_time,
             end_time_s: seg_end_time,
-            quality: quality_result,
+            quality: visqol_result.into(),
             snr,
             dropouts,
             level_ref,
@@ -185,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     
-    // 全局对齐信息（首次出现的峰值）
+    // 全局对齐信息
     let first_peak = alignment_peaks.first().cloned().unwrap_or(alignment::AlignmentResult {
         offset_samples: 0,
         delay_ms: 0.0,
@@ -197,7 +184,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         report::ReportConfig {
             reference_path: args.reference.to_string_lossy().to_string(),
             recorded_path: args.recorded.to_string_lossy().to_string(),
-            target_sample_rate,
+            target_sample_rate: ref_audio.sample_rate,
         },
         report::AlignmentInfo {
             offset_samples: first_peak.offset_samples,
@@ -221,4 +208,51 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     Ok(())
+}
+
+/// 从 visqol 结果生成诊断信息
+fn diagnose_from_visqol(result: &visqol::VisqolResult) -> report::DiagnosisResult {
+    let quality_rating = match result.moslqo {
+        s if s >= 4.5 => "优秀",
+        s if s >= 4.0 => "良好",
+        s if s >= 3.5 => "一般",
+        s if s >= 3.0 => "较差",
+        s if s >= 2.0 => "差",
+        _ => "极差",
+    }.to_string();
+    
+    let low_count = (result.fvnsim.len() / 3).max(1);
+    let high_count = result.fvnsim.len().saturating_sub(result.fvnsim.len() * 2 / 3);
+    let low_freq_similarity = result.fvnsim.iter().take(low_count).sum::<f64>() / low_count as f64;
+    let high_freq_similarity = if high_count > 0 {
+        result.fvnsim.iter().rev().take(high_count).sum::<f64>() / high_count as f64
+    } else { result.vnsim };
+    
+    let background_noise_detected = result.vnsim < 0.85 && low_freq_similarity < 0.80;
+    let high_freq_loss_detected = high_freq_similarity < low_freq_similarity * 0.8 && high_freq_similarity < 0.75;
+    
+    let worst_patch = result.patch_sims.iter()
+        .min_by(|a, b| a.similarity.partial_cmp(&b.similarity).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|p| (p.similarity, p.ref_patch_start_time, p.ref_patch_end_time));
+    
+    let avg_sim = if !result.patch_sims.is_empty() {
+        result.patch_sims.iter().map(|p| p.similarity).sum::<f64>() / result.patch_sims.len() as f64
+    } else { result.vnsim };
+    
+    let intermittent_artifacts_detected = worst_patch.map(|(sim, _, _)| sim < avg_sim * 0.7).unwrap_or(false);
+    let freq_stability = if !result.fstdnsim.is_empty() {
+        result.fstdnsim.iter().sum::<f64>() / result.fstdnsim.len() as f64
+    } else { 0.0 };
+    
+    report::DiagnosisResult {
+        quality_rating,
+        mos_score: result.moslqo,
+        background_noise_detected,
+        high_freq_loss_detected,
+        intermittent_artifacts_detected,
+        low_freq_similarity,
+        high_freq_similarity,
+        worst_patch,
+        freq_stability,
+    }
 }
