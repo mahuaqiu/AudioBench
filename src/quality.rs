@@ -90,6 +90,18 @@ pub fn evaluate_quality(
         };
     }
     
+
+    // 预处理前调试：检查原始频谱图数据
+    let ref_raw_stats = compute_raw_spectro_stats(&ref_spectro);
+    let deg_raw_stats = compute_raw_spectro_stats(&deg_spectro);
+    eprintln!("[DEBUG] === 预处理前频谱图 ===");
+    eprintln!("[DEBUG] ref原始: min={:?}, max={:?}, mean={:?}", 
+        ref_raw_stats.0, ref_raw_stats.1, ref_raw_stats.2);
+    eprintln!("[DEBUG] deg原始: min={:?}, max={:?}, mean={:?}", 
+        deg_raw_stats.0, deg_raw_stats.1, deg_raw_stats.2);
+    eprintln!("[DEBUG] ref第1帧前3带: {:?}", get_raw_frame(&ref_spectro, 0, 3));
+    eprintln!("[DEBUG] deg第1帧前3带: {:?}", get_raw_frame(&deg_spectro, 0, 3));
+    
     // 预处理：dB 转换 + 噪声门限 + 归一化
     preprocess_spectrograms(&mut ref_spectro, &mut deg_spectro, reference, degraded);
     
@@ -363,4 +375,34 @@ pub fn diagnose(result: &QualityResult) -> DiagnosisResult {
         background_noise_detected, high_freq_loss_detected, intermittent_artifacts_detected,
         low_freq_similarity, high_freq_similarity, worst_patch, freq_stability,
     }
+}
+
+
+/// 计算原始频谱图统计（预处理前）
+fn compute_raw_spectro_stats(spectro: &[Vec<f64>]) -> (f64, f64, f64) {
+    let mut min_val = f64::INFINITY;
+    let mut max_val = f64::NEG_INFINITY;
+    let mut sum = 0.0;
+    let mut count = 0;
+    
+    for band in spectro.iter() {
+        for &val in band.iter() {
+            if val > 0.0 {  // 忽略零值看真实数据
+                min_val = min_val.min(val);
+                max_val = max_val.max(val);
+                sum += val;
+                count += 1;
+            }
+        }
+    }
+    
+    let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+    (min_val, max_val, mean)
+}
+
+/// 获取原始频谱某帧的前N个频段值
+fn get_raw_frame(spectro: &[Vec<f64>], frame_idx: usize, num_bands: usize) -> Vec<f64> {
+    (0..num_bands.min(spectro.len()))
+        .filter_map(|b| spectro[b].get(frame_idx).copied())
+        .collect()
 }
