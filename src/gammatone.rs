@@ -280,7 +280,7 @@ pub fn preprocess_spectrograms(
     spectrogram_to_db(deg_spectro);
     
     // 绝对门限 -45dB（与 ViSQOL 一致）
-    let abs_floor = -45.0;
+    let abs_floor = -80.0; // 更严格的门限保留更多细节
     for band in ref_spectro.iter_mut() {
         for val in band.iter_mut() { *val = val.max(abs_floor); }
     }
@@ -307,6 +307,52 @@ pub fn preprocess_spectrograms(
     for band in deg_spectro.iter_mut() {
         for val in band.iter_mut() { *val -= min_val; }
     }
+    
+    // 调试输出预处理后的频谱图统计信息
+    eprintln!("[DEBUG] === 预处理后频谱图统计 ===");
+    let ref_stats = compute_spectrogram_stats(ref_spectro);
+    let deg_stats = compute_spectrogram_stats(deg_spectro);
+    eprintln!("[DEBUG] ref: min={:.2}, max={:.2}, mean={:.2}, std={:.2}", 
+        ref_stats.0, ref_stats.1, ref_stats.2, ref_stats.3);
+    eprintln!("[DEBUG] deg: min={:.2}, max={:.2}, mean={:.2}, std={:.2}", 
+        deg_stats.0, deg_stats.1, deg_stats.2, deg_stats.3);
+    eprintln!("[DEBUG] ref前3帧前3带: {:?}", get_frame_values(ref_spectro, 0, 3));
+    eprintln!("[DEBUG] deg前3帧前3带: {:?}", get_frame_values(deg_spectro, 0, 3));
+}
+
+/// 计算频谱图的统计信息：(min, max, mean, std)
+fn compute_spectrogram_stats(spectro: &[Vec<f64>]) -> (f64, f64, f64, f64) {
+    let mut min_val = f64::INFINITY;
+    let mut max_val = f64::NEG_INFINITY;
+    let mut sum = 0.0;
+    let mut count = 0;
+    
+    for band in spectro.iter() {
+        for &val in band.iter() {
+            min_val = min_val.min(val);
+            max_val = max_val.max(val);
+            sum += val;
+            count += 1;
+        }
+    }
+    
+    let mean = if count > 0 { sum / count as f64 } else { 0.0 };
+    let mut variance = 0.0;
+    for band in spectro.iter() {
+        for &val in band.iter() {
+            variance += (val - mean).powi(2);
+        }
+    }
+    let std = if count > 1 { (variance / count as f64).sqrt() } else { 0.0 };
+    
+    (min_val, max_val, mean, std)
+}
+
+/// 获取某帧的前N个频段值
+fn get_frame_values(spectro: &[Vec<f64>], frame_idx: usize, num_bands: usize) -> Vec<f64> {
+    (0..num_bands.min(spectro.len()))
+        .filter_map(|b| spectro[b].get(frame_idx).copied())
+        .collect()
 }
 
 /// 在时域对 degraded 信号做 SPL 归一化（与 ViSQOL ScaleToMatchSoundPressureLevel 一致）
