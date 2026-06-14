@@ -55,6 +55,7 @@ audio_bench -r <参考音频> -c <录制音频> [选项]
 
 | 参数 | 说明 |
 |------|------|
+| `--speech` | 强制使用语音模式 (16kHz)，默认音频模式 (48kHz) |
 | `-r, --reference` | 参考音频文件（WAV） |
 | `-c, --recorded` | 录制音频文件（WAV） |
 | `-o, --output` | 输出 JSON 报告（可选） |
