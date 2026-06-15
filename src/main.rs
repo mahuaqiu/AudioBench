@@ -6,6 +6,7 @@
 //!   audio_bench --reference ref.wav --recorded rec.wav
 
 mod alignment;
+mod alignment_v2;
 mod audio_io;
 mod metrics;
 mod visqol;
@@ -73,13 +74,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ref_duration = ref_audio.duration_secs();
     let rec_duration = rec_audio.duration_secs();
     
-    // 多峰检测：自动发现录制音频中参考音频的所有出现位置
-    println!("[*] 执行多峰检测，定位参考音频的所有出现位置...");
-    let alignment_peaks = alignment::find_all_alignments(
+    // 多峰检测：使用频域特征匹配 + FFT 互相关精细化
+    println!("[*] 执行多峰检测（频域特征匹配 + 精细对齐）...");
+    let alignment_peaks = alignment_v2::find_all_alignments_hybrid(
         &ref_audio.samples,
         &rec_audio.samples,
         ref_audio.sample_rate,
-        0.3,  // 置信度阈值
+        0.2,  // 置信度阈值（可适当降低）
     );
     
     let num_segments = alignment_peaks.len();
@@ -180,7 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // 全局对齐信息（使用第一段的对齐信息）
-    let first_peak = alignment_peaks.first().cloned().unwrap_or(alignment::AlignmentResult {
+    let first_peak = alignment_peaks.first().cloned().unwrap_or(alignment_v2::AlignmentResult {
         offset_samples: 0,
         delay_ms: 0.0,
         confidence: 0.0,
