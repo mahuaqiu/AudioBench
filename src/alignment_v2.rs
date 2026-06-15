@@ -1,13 +1,7 @@
 //! 频域特征匹配对齐模块
 //!
 //! 使用 MFCC 特征进行鲁棒的对齐检测。
-//! 步骤：
-//! 1. 分帧 + 汉宁窗 + FFT
-//! 2. 梅尔滤波器组提取梅尔频谱
-//! 3. DCT 变换得到 MFCC 特征
-//! 4. 滑动余弦相似度匹配
-//! 5. 峰值检测定位参考音频出现位置
-//! 6. FFT 互相关精细化
+//! 优化：CMVN 归一化 + VAD 过滤 + 精细化失败时保留 MFCC 结果
 
 use rustfft::{num_complex::Complex, FftPlanner};
 
@@ -29,6 +23,8 @@ const HOP_SIZE: usize = 512;
 const NUM_MFCC: usize = 13;
 /// 梅尔滤波器组数量
 const NUM_MEL_BANDS: usize = 26;
+/// VAD 能量阈值（低于此值认为静音）
+const VAD_THRESHOLD: f64 = 0.01;
 
 /// 创建汉宁窗
 fn hanning_window(size: usize) -> Vec<f64> {
@@ -95,8 +91,8 @@ fn dct_ii(input: &[f64], num_coeffs: usize) -> Vec<f64> {
     output
 }
 
-/// 对音频提取 MFCC 特征序列
-pub fn extract_mfcc_features(samples: &[f64], sample_rate: u32) -> Vec<Vec<f64>> {
+/// 对音频提取 MFCC 特征序列（带 VAD 标记）
+pub fn extract_mfcc_features(samples: &[f64], sample_rate: u32) -> (Vec<Vec<f64>>, Vec<bool>) {
     let n = samples.len();
     let window = hanning_window(FRAME_SIZE);
     let filterbank = create_mel_filterbank(sample_rate);
@@ -105,9 +101,18 @@ pub fn extract_mfcc_features(samples: &[f64], sample_rate: u32) -> Vec<Vec<f64>>
     let fft = planner.plan_fft_forward(FRAME_SIZE);
 
     let mut features = Vec::new();
+    let mut vad_flags = Vec::new();
     let mut pos = 0;
 
     while pos + FRAME_SIZE <= n {
+        // 计算帧能量用于 VAD
+        let frame_energy = samples[pos..pos + FRAME_SIZE]
+            .iter()
+            .map(|x| x * x)
+            .sum::<f64>() / FRAME_SIZE as f64;
+        let is_speech = frame_energy > VAD_THRESHOLD;
+
+        // 加窗
         let mut frame: Vec<Complex<f64>> = samples[pos..pos + FRAME_SIZE]
             .iter()
             .zip(window.iter())
@@ -131,14 +136,56 @@ pub fn extract_mfcc_features(samples: &[f64], sample_rate: u32) -> Vec<Vec<f64>>
             .collect();
 
         let mut mfcc = dct_ii(&mel_energies, NUM_MFCC);
-        let log_energy = (samples[pos..pos + FRAME_SIZE].iter().map(|x| x * x).sum::<f64>() + 1e-10).ln();
-        mfcc[0] = log_energy;
+        mfcc[0] = (frame_energy + 1e-10).ln();
 
         features.push(mfcc);
+        vad_flags.push(is_speech);
         pos += HOP_SIZE;
     }
 
-    features
+    (features, vad_flags)
+}
+
+/// CMVN 归一化：倒谱均值方差归一化
+/// 消除设备增益和音量差异的影响
+fn cmvn_normalize(features: &mut [Vec<f64>]) {
+    if features.is_empty() || features[0].is_empty() {
+        return;
+    }
+
+    let num_frames = features.len();
+    let num_coeffs = features[0].len();
+
+    // 计算每个系数的均值和标准差
+    let mut means = vec![0.0; num_coeffs];
+    let mut stds = vec![0.0; num_coeffs];
+
+    for frame in features.iter() {
+        for (i, &val) in frame.iter().enumerate() {
+            means[i] += val;
+        }
+    }
+    for m in means.iter_mut() {
+        *m /= num_frames as f64;
+    }
+
+    for frame in features.iter() {
+        for (i, &val) in frame.iter().enumerate() {
+            let diff = val - means[i];
+            stds[i] += diff * diff;
+        }
+    }
+
+    for s in stds.iter_mut() {
+        *s = ((*s / num_frames as f64) + 1e-10).sqrt();
+    }
+
+    // 归一化
+    for frame in features.iter_mut() {
+        for (i, val) in frame.iter_mut().enumerate() {
+            *val = (*val - means[i]) / stds[i];
+        }
+    }
 }
 
 /// 计算余弦相似度
@@ -156,10 +203,12 @@ fn cosine_similarity(a: &[f64], b: &[f64]) -> f64 {
     (dot / denom).clamp(-1.0, 1.0)
 }
 
-/// 滑动 MFCC 匹配
+/// 滑动 MFCC 匹配（帧级别滑动）
+/// 只对比短音频中的 VAD 有声帧
 fn sliding_mfcc_match(
     short_mfcc: &[Vec<f64>],
     long_mfcc: &[Vec<f64>],
+    short_vad: &[bool],
 ) -> Vec<(usize, f64)> {
     if short_mfcc.is_empty() || long_mfcc.is_empty() {
         return vec![];
@@ -168,29 +217,36 @@ fn sliding_mfcc_match(
     let short_len = short_mfcc.len();
     let long_len = long_mfcc.len();
 
-    let short_norms: Vec<f64> = short_mfcc
+    // 找出短音频中的有声帧索引
+    let valid_indices: Vec<usize> = short_vad
         .iter()
-        .map(|f| f.iter().map(|x| x * x).sum::<f64>().sqrt())
+        .enumerate()
+        .filter(|&(_, &is_speech)| is_speech)
+        .map(|(i, _)| i)
         .collect();
+
+    // 如果没有有声帧，回退到全部帧
+    let indices_to_use = if valid_indices.is_empty() {
+        (0..short_len).collect()
+    } else {
+        valid_indices
+    };
 
     let mut similarities = Vec::with_capacity(long_len.saturating_sub(short_len) + 1);
 
+    // 帧级别滑动：start 是帧索引，不是采样点
     for start in 0..=long_len.saturating_sub(short_len) {
         let mut total_sim = 0.0;
-        let mut valid_frames = 0;
-        for (i, short_f) in short_mfcc.iter().enumerate() {
-            let long_f = &long_mfcc[start + i];
-            let sim = cosine_similarity(short_f, long_f);
-            if short_norms[i] > 0.1 && long_f.iter().map(|x| x * x).sum::<f64>().sqrt() > 0.1 {
-                total_sim += sim;
-                valid_frames += 1;
+        
+        // 只对比有声帧
+        for &i in &indices_to_use {
+            if start + i < long_len {
+                total_sim += cosine_similarity(&short_mfcc[i], &long_mfcc[start + i]);
             }
         }
-        if valid_frames > 0 {
-            similarities.push((start, total_sim / valid_frames as f64));
-        } else {
-            similarities.push((start, 0.0));
-        }
+        
+        let avg_sim = total_sim / indices_to_use.len() as f64;
+        similarities.push((start, avg_sim));
     }
 
     similarities
@@ -218,6 +274,7 @@ fn find_peaks(similarities: &[(usize, f64)], min_gap_frames: usize, threshold: f
         }
     }
 
+    // 按相似度降序排序，按间距去重
     peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let mut filtered = Vec::new();
@@ -241,8 +298,9 @@ pub fn find_all_alignments_v2(
     sample_rate: u32,
     confidence_threshold: f64,
 ) -> Vec<AlignmentResult> {
-    let ref_mfcc = extract_mfcc_features(reference, sample_rate);
-    let deg_mfcc = extract_mfcc_features(degraded, sample_rate);
+    // 提取 MFCC 特征和 VAD 标记
+    let (ref_mfcc, ref_vad) = extract_mfcc_features(reference, sample_rate);
+    let (deg_mfcc, _) = extract_mfcc_features(degraded, sample_rate);
 
     if ref_mfcc.is_empty() || deg_mfcc.is_empty() {
         return vec![AlignmentResult {
@@ -252,13 +310,22 @@ pub fn find_all_alignments_v2(
         }];
     }
 
-    let similarities = sliding_mfcc_match(&ref_mfcc, &deg_mfcc);
+    // CMVN 归一化：消除音量差异
+    let mut ref_mfcc_norm = ref_mfcc.clone();
+    let mut deg_mfcc_norm = deg_mfcc.clone();
+    cmvn_normalize(&mut ref_mfcc_norm);
+    cmvn_normalize(&mut deg_mfcc_norm);
 
+    // 滑动匹配（帧级别）
+    let similarities = sliding_mfcc_match(&ref_mfcc_norm, &deg_mfcc_norm, &ref_vad);
+
+    // 找峰值
     let min_gap_frames = ref_mfcc.len() / 2;
     let peaks = find_peaks(&similarities, min_gap_frames, confidence_threshold);
 
     let mut results = Vec::new();
     for (frame_start, confidence) in peaks {
+        // 将帧索引转换为采样点索引
         let offset_samples = frame_start * HOP_SIZE;
         results.push(AlignmentResult {
             offset_samples,
@@ -267,6 +334,7 @@ pub fn find_all_alignments_v2(
         });
     }
 
+    // 兜底：如果没找到满足阈值的峰，返回全局最佳匹配
     if results.is_empty() {
         if let Some(&(pos, sim)) = similarities.iter().max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)) {
             results.push(AlignmentResult {
@@ -280,16 +348,19 @@ pub fn find_all_alignments_v2(
     results
 }
 
-/// 组合对齐：MFCC + FFT 互相关精细化
+/// 组合对齐：MFCC + 时域互相关精细化
+/// 核心改进：精细化失败时保留 MFCC 结果，而不是回退到全局 FFT
 pub fn find_all_alignments_hybrid(
     reference: &[f64],
     degraded: &[f64],
     sample_rate: u32,
     confidence_threshold: f64,
 ) -> Vec<AlignmentResult> {
+    // 第1步：MFCC 特征匹配找候选位置
     let candidates = find_all_alignments_v2(reference, degraded, sample_rate, confidence_threshold * 0.5);
 
     if candidates.is_empty() {
+        // MFCC 完全找不到候选，回退到原始 FFT 互相关
         let fallbacks = crate::alignment::find_all_alignments(reference, degraded, sample_rate, confidence_threshold);
         return fallbacks.into_iter().map(|r| AlignmentResult {
             offset_samples: r.offset_samples,
@@ -299,9 +370,10 @@ pub fn find_all_alignments_hybrid(
     }
 
     let ref_len = reference.len();
+    // 搜索窗口：候选位置前后各 1 秒
     let search_window = sample_rate as usize;
 
-    let mut refined = Vec::new();
+    let mut final_results = Vec::new();
 
     for candidate in candidates {
         let search_start = candidate.offset_samples.saturating_sub(search_window);
@@ -309,72 +381,65 @@ pub fn find_all_alignments_hybrid(
             .min(degraded.len().saturating_sub(ref_len));
 
         if search_end <= search_start || ref_len > degraded.len() {
-            refined.push(candidate);
+            // 搜索范围无效，保留 MFCC 候选位置
+            final_results.push(candidate);
             continue;
         }
 
-        let local_result = local_fft_xcorr(
+        // 局部时域互相关精细化
+        let local_result = local_time_xcorr(
             reference,
             &degraded[search_start..],
-            sample_rate,
             search_end - search_start,
         );
 
         match local_result {
             Some((best_local_offset, confidence)) => {
-                refined.push(AlignmentResult {
+                final_results.push(AlignmentResult {
                     offset_samples: search_start + best_local_offset,
                     delay_ms: (search_start + best_local_offset) as f64 / sample_rate as f64 * 1000.0,
                     confidence,
                 });
             }
             None => {
-                refined.push(candidate);
+                // 【核心修复】：精细化失败时，保留 MFCC 粗对齐位置
+                // 而不是回退到全局 FFT（全局 FFT 对噪声更敏感，不可靠）
+                final_results.push(candidate);
             }
         }
     }
 
-    refined.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    // 去重 + 排序
+    final_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
 
     let min_gap = ref_len / 2;
-    let mut final_results = Vec::new();
-    for r in refined {
-        let too_close = final_results.iter().any(|existing: &AlignmentResult| {
+    let mut deduped = Vec::new();
+    for r in final_results {
+        let too_close = deduped.iter().any(|existing: &AlignmentResult| {
             ((r.offset_samples as isize - existing.offset_samples as isize).unsigned_abs() as usize) < min_gap
         });
         if !too_close {
-            final_results.push(r);
+            deduped.push(r);
         }
-        if final_results.len() >= 10 {
+        if deduped.len() >= 10 {
             break;
         }
     }
 
-    final_results.sort_by_key(|r| r.offset_samples);
-
-    if final_results.is_empty() {
-        let fallbacks = crate::alignment::find_all_alignments(reference, degraded, sample_rate, confidence_threshold);
-        return fallbacks.into_iter().map(|r| AlignmentResult {
-            offset_samples: r.offset_samples,
-            delay_ms: r.delay_ms,
-            confidence: r.confidence,
-        }).collect();
-    }
-
-    final_results
+    deduped.sort_by_key(|r| r.offset_samples);
+    deduped
 }
 
-/// 局部 FFT 互相关精细化
-fn local_fft_xcorr(
+/// 局部时域互相关精细化（时域循环，比 FFT 更适合小窗口）
+fn local_time_xcorr(
     reference: &[f64],
     degraded_local: &[f64],
-    _sample_rate: u32,
     search_len: usize,
 ) -> Option<(usize, f64)> {
     let ref_len = reference.len();
     let deg_len = degraded_local.len().min(search_len + ref_len);
 
-    if ref_len > deg_len {
+    if ref_len > deg_len || ref_len == 0 {
         return None;
     }
 
@@ -383,65 +448,34 @@ fn local_fft_xcorr(
         return None;
     }
 
-    let n = deg_len.next_power_of_two();
+    // 预计算参考信号能量
+    let ref_energy: f64 = reference.iter().map(|x| x * x).sum();
 
-    let mut ref_fft: Vec<Complex<f64>> = reference
-        .iter()
-        .map(|&x| Complex::new(x, 0.0))
-        .chain(std::iter::repeat(Complex::new(0.0, 0.0)))
-        .take(n)
-        .collect();
-
-    let mut deg_fft: Vec<Complex<f64>> = degraded_local
-        .iter()
-        .map(|&x| Complex::new(x, 0.0))
-        .chain(std::iter::repeat(Complex::new(0.0, 0.0)))
-        .take(n)
-        .collect();
-
-    let mut planner = FftPlanner::new();
-    let fft = planner.plan_fft_forward(n);
-    fft.process(&mut ref_fft);
-    fft.process(&mut deg_fft);
-
-    let mut product: Vec<Complex<f64>> = ref_fft
-        .iter()
-        .zip(deg_fft.iter())
-        .map(|(r, d)| r.conj() * d)
-        .collect();
-
-    let ifft = planner.plan_fft_inverse(n);
-    ifft.process(&mut product);
-
-    let scale = 1.0 / n as f64;
-
+    // 预计算 degraded 局部能量前缀和
     let prefix_sq: Vec<f64> = {
-        let mut p = vec![0.0];
-        let mut acc = 0.0;
-        for &x in degraded_local {
-            acc += x * x;
-            p.push(acc);
+        let mut p = vec![0.0; deg_len + 1];
+        for (i, &x) in degraded_local.iter().enumerate().take(deg_len) {
+            p[i + 1] = p[i] + x * x;
         }
         p
     };
 
-    let ref_energy: f64 = reference.iter().map(|x| x * x).sum();
-
     let mut best_offset = 0;
     let mut best_conf = 0.0f64;
 
+    // 时域循环计算互相关（对于小窗口比 FFT 更高效）
     for k in 0..=max_search {
-        let xcorr_val = (product[k].re * scale).abs();
+        let sum: f64 = reference
+            .iter()
+            .zip(degraded_local[k..].iter())
+            .map(|(r, &d)| r * d)
+            .sum();
 
-        let seg_energy = if k + ref_len <= prefix_sq.len() {
-            prefix_sq[k + ref_len] - prefix_sq[k]
-        } else {
-            0.0
-        };
-
+        let seg_energy = prefix_sq[k + ref_len] - prefix_sq[k];
         let denom = (ref_energy * seg_energy).sqrt();
+
         if denom > 1e-12 {
-            let conf = (xcorr_val / denom).min(1.0);
+            let conf = ((sum / denom).abs()).min(1.0);
             if conf > best_conf {
                 best_conf = conf;
                 best_offset = k;
@@ -449,7 +483,8 @@ fn local_fft_xcorr(
         }
     }
 
-    if best_conf > 0.05 {
+    // 只有置信度足够高才接受精细化结果
+    if best_conf > 0.3 {
         Some((best_offset, best_conf))
     } else {
         None
