@@ -3,6 +3,7 @@
 
 /// SNR（信噪比）计算结果
 #[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)]
 pub struct SnrResult {
     /// 信噪比（dB）
     pub snr_db: f64,
@@ -14,6 +15,7 @@ pub struct SnrResult {
 
 /// 计算信噪比
 /// SNR = 10 * log10(Σref² / Σnoise²)
+#[allow(dead_code)]
 pub fn compute_snr(reference: &[f64], degraded: &[f64]) -> SnrResult {
     assert_eq!(reference.len(), degraded.len(), "参考和录制音频长度必须一致");
     

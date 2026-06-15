@@ -3,7 +3,7 @@
 //! 支持分段评估：每段独立评分 + 整体统计汇总
 
 use serde::Serialize;
-use crate::metrics::{DropoutResult, LevelResult, SnrResult};
+use crate::metrics::{DropoutResult, LevelResult};
 use crate::visqol::VisqolResult as QualityResult;
 
 
