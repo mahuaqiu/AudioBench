@@ -104,6 +104,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
         let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
 
+        // 调试：打印分段提取的详细信息
+        let seg_samples = &rec_audio.samples[seg_start..seg_end];
+        let seg_rms = (seg_samples.iter().map(|&x| x * x).sum::<f64>() / seg_samples.len() as f64).sqrt();
+        let seg_peak = seg_samples.iter().map(|&x| x.abs()).fold(0.0f64, |a, b| a.max(b));
+        let seg_max = seg_samples.iter().cloned().fold(f64::NEG_INFINITY, |a, b| a.max(b));
+        let seg_min = seg_samples.iter().cloned().fold(f64::INFINITY, |a, b| a.min(b));
+        
+        println!("[DEBUG] 第{}段提取: 样本数={}, 偏移={}, RMS={:.6}, 峰值={:.6}, 最大={:.6}, 最小={:.6}", 
+                 seg_idx+1, seg_samples.len(), seg_start, seg_rms, seg_peak, seg_max, seg_min);
+
         let mut seg_degraded = rec_audio.samples[seg_start..seg_end].to_vec();
         // 不足参考长度的末尾补零
         seg_degraded.resize(ref_audio.samples.len(), 0.0);
