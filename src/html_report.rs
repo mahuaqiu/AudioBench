@@ -42,6 +42,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
             i + 1, data, color)
     }).collect();
 
+    let fvnsim_json = fvnsim_datasets.join(",");
+    let energy_json = energy_datasets.join(",");
+    let patch_json = patch_datasets.join(",");
+
     format!(r#"<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -109,7 +113,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 <div class="card">
 <div class="card-label">VNSIM 均值</div>
-<div class="card-value">{vnsim_mean}</div>
+<div class="card-value">{vnsim_mean:.4}</div>
 <div class="card-hint">全局神经图相似度（0-1），1=完全相同</div>
 </div>
 <div class="card">
@@ -140,7 +144,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 
 <div class="section"><div class="section-title">各段详细评分</div>
-<table><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>卡顿</th></tr></thead>
+<table><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>卡顿</th></tr></thead>
 <tbody>{table_rows}</tbody>
 </table>
 </div>
@@ -169,20 +173,21 @@ const REPORT = {json_data};
 const segLabels = {seg_labels_json};
 const mosValues = {mos_values_json};
 const vnsimValues = {vnsim_values_json};
+const bandLabels = Array.from({{length:32}},(_,i)=>'B'+(i+1));
 
 new Chart(document.getElementById('chartMos'),{{type:'line',data:{{labels:segLabels,datasets:[{{label:'MOS-LQO',data:mosValues,borderColor:'#3182ce',backgroundColor:'rgba(49,130,206,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}}}}}});
 
 new Chart(document.getElementById('chartVnsim'),{{type:'line',data:{{labels:segLabels,datasets:[{{label:'VNSIM',data:vnsimValues,borderColor:'#38a169',backgroundColor:'rgba(56,161,105,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}}}}}});
 
-new Chart(document.getElementById('chartFvnsim'),{{type:'line',data:{{labels:[].concat(...Array(32).keys()).map(i=>'B'+(i+1))),datasets:[{fvnsim_datasets_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}}}}}});
+new Chart(document.getElementById('chartFvnsim'),{{type:'line',data:{{labels:bandLabels,datasets:[{fvnsim_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}}}}}});
 
-new Chart(document.getElementById('chartEnergy'),{{type:'line',data:{{labels:[].concat(...Array(32).keys()).map(i=>'B'+(i+1))),datasets:[{energy_datasets_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}}}}}});
+new Chart(document.getElementById('chartEnergy'),{{type:'line',data:{{labels:bandLabels,datasets:[{energy_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}}}}}});
 
-new Chart(document.getElementById('chartPatch'),{{type:'line',data:{{labels:REPORT.segments&&REPORT.segments[0]&&REPORT.segments[0].quality&&REPORT.segments[0].quality.patch_sims?REPORT.segments[0].quality.patch_sims.map((_,i)=>'Patch'+(i+1)):[],datasets:[{patch_datasets_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}}}}}});
+new Chart(document.getElementById('chartPatch'),{{type:'line',data:{{labels:REPORT.segments&&REPORT.segments[0]&&REPORT.segments[0].quality&&REPORT.segments[0].quality.patch_sims?REPORT.segments[0].quality.patch_sims.map((_,i)=>'Patch'+(i+1)):[],datasets:[{patch_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}}}}}});
 </script>
 </body>
 </html>"#,
-        timestamp = chrono_now(),
+        timestamp = format_timestamp(),
         ref_path = report.config.reference_path,
         deg_path = report.config.recorded_path,
         ref_dur = report.reference_duration_s,
@@ -202,28 +207,72 @@ new Chart(document.getElementById('chartPatch'),{{type:'line',data:{{labels:REPO
         seg_labels_json = serde_json::to_string(&seg_labels).unwrap_or("[]".to_string()),
         mos_values_json = serde_json::to_string(&mos_values).unwrap_or("[]".to_string()),
         vnsim_values_json = serde_json::to_string(&vnsim_values).unwrap_or("[]".to_string()),
-        fvnsim_datasets_json = fvnsim_datasets.join(","),
-        energy_datasets_json = energy_datasets.join(","),
-        patch_datasets_json = patch_datasets.join(","),
+        fvnsim_json = fvnsim_json,
+        energy_json = energy_json,
+        patch_json = patch_json,
         table_rows = table_rows,
     )
 }
 
-fn chrono_now() -> String {
-    let d = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("Unix: {}s", d.as_secs())
+/// 生成可读的时间戳（年-月-日 时:分:秒）
+fn format_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    // 手动计算年月日时分秒（无外部依赖）
+    let days_since_epoch = secs / 86400;
+    let time_of_day = secs % 86400;
+    let hour = (time_of_day / 3600) as u32;
+    let minute = ((time_of_day % 3600) / 60) as u32;
+    let second = (time_of_day % 60) as u32;
+    // 计算年月日（基于闰年规则）
+    let (year, month, day) = days_to_ymd(days_since_epoch);
+    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, hour, minute, second)
+}
+
+/// 将自 1970-01-01 以来的天数转换为 (年, 月, 日)
+fn days_to_ymd(mut days: u64) -> (u32, u32, u32) {
+    let mut year = 1970u32;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+    let leap = is_leap_year(year);
+    let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut month = 1u32;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        month += 1;
+    }
+    (year, month, (days + 1) as u32)
+}
+
+fn is_leap_year(year: u32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
 }
 
 fn generate_table_rows(report: &EvaluationReport) -> String {
     report.segments.iter().enumerate().map(|(i, seg)| {
         let (low, high) = compute_bands(&seg.quality.fvnsim);
+        let energy_mean = if seg.band_energy_ratios.is_empty() {
+            0.0
+        } else {
+            seg.band_energy_ratios.iter().sum::<f64>() / seg.band_energy_ratios.len() as f64
+        };
         let dropout = if seg.dropouts.count > 0 {
             format!("{}次/{:.0}ms", seg.dropouts.count, seg.dropouts.total_duration_ms)
         } else { "无".to_string() };
-        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td>{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{}</td></tr>",
-            i+1, seg.start_time_s, seg.end_time_s, seg.quality.moslqo, seg.quality.vnsim, low, high, dropout)
+        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td>{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{}</td></tr>",
+            i+1, seg.start_time_s, seg.end_time_s, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, dropout)
     }).collect()
 }
 
