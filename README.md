@@ -69,6 +69,7 @@ audio_bench -r <参考音频> -c <录制音频> [选项]
 | `-c, --recorded` | 录制音频文件（WAV） |
 | `--speech` | 使用语音模式（16kHz），默认为音频模式（48kHz） |
 | `-o, --output` | 输出 JSON 报告（可选） |
+| `--html` | 输出 HTML 可视化报告（可选，需指定文件路径） |
 
 ### 模式说明
 
@@ -86,6 +87,15 @@ audio_bench -r ref.wav -c rec.wav --speech
 
 # 输出 JSON 报告
 audio_bench -r ref.wav -c rec.wav -o report.json
+
+# 输出 HTML 可视化报告
+audio_bench -r ref.wav -c rec.wav --html report.html
+
+# 同时输出 JSON 和 HTML 报告
+audio_bench -r ref.wav -c rec.wav -o report.json --html report.html
+
+# 语音模式 + HTML 报告
+audio_bench -r ref.wav -c rec.wav --speech --html report.html
 ```
 
 ## 输出指标

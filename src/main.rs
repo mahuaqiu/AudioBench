@@ -206,13 +206,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("JSON 序列化失败: {}", e))?;
         fs::write(&output_path, json)?;
         println!("\n[+] JSON 报告已保存: {:?}", output_path);
+    }
 
     // 输出 HTML 报告
     if let Some(html_path) = args.html {
         let html = html_report::generate_html_report(&report);
         fs::write(&html_path, html)?;
         println!("\n[+] HTML 报告已保存: {:?}", html_path);
-    }
     }
     
     Ok(())
