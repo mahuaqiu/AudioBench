@@ -17,13 +17,14 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     let vnsim_values: Vec<f64> = report.segments.iter().map(|s| s.quality.vnsim).collect();
 
     // fVNSIM 数据
+    // fVNSIM 数据（取全部，不限制32个）
     let fvnsim_data: Vec<Vec<f64>> = report.segments.iter()
-        .map(|seg| seg.quality.fvnsim.iter().take(32).cloned().collect())
+        .map(|seg| seg.quality.fvnsim.iter().cloned().collect())
         .collect();
 
-    // 频段���量比
+    // 频段能量比（取全部，不限制32个）
     let energy_data: Vec<Vec<f64>> = report.segments.iter()
-        .map(|seg| seg.band_energy_ratios.iter().take(32).cloned().collect())
+        .map(|seg| seg.band_energy_ratios.iter().cloned().collect())
         .collect();
 
     // Patch 相似度
@@ -200,24 +201,29 @@ new Chart(document.getElementById('chartVnsim'),{{
   options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}}}}}}
 }});
 
-// fVNSIM 频段相似度
+// fVNSIM 频段相似度 - 动态生成bandLabels基于实际数据长度
+var bandLabels = fvnsimData.length > 0 && fvnsimData[0].length > 0 
+  ? Array.from({{length:fvnsimData[0].length}},function(_,i){{return 'B'+(i+1);}})
+  : Array.from({{length:32}},function(_,i){{return 'B'+(i+1);}});
 var fvnsimDatasets = fvnsimData.map(function(d,i){{
   return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
 }});
-var bandLabels = Array.from({{length:32}},function(_,i){{return 'B'+(i+1);}});
 new Chart(document.getElementById('chartFvnsim'),{{
   type:'line',
   data:{{labels:bandLabels,datasets:fvnsimDatasets}},
   options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}}}}}}
 }});
 
-// 频段能量比
+// 频段能量比 - 使用与fVNSIM相同的动态bandLabels
 var energyDatasets = energyData.map(function(d,i){{
   return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
 }});
+var energyBandLabels = energyData.length > 0 && energyData[0].length > 0
+  ? Array.from({{length:energyData[0].length}},function(_,i){{return 'B'+(i+1);}})
+  : bandLabels;
 new Chart(document.getElementById('chartEnergy'),{{
   type:'line',
-  data:{{labels:bandLabels,datasets:energyDatasets}},
+  data:{{labels:energyBandLabels,datasets:energyDatasets}},
   options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}}}}}}
 }});
 
