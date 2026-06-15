@@ -139,9 +139,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("      MOS-LQO: {:.2}, VNSIM: {:.4}", 
                  visqol_result.moslqo, visqol_result.vnsim);
 
-        // SNR
-        let snr = metrics::compute_snr(&ref_audio.samples, &seg_degraded);
-
         // 卡顿检测
         let dropouts = metrics::detect_dropouts(
             &ref_audio.samples,
@@ -165,7 +162,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             start_time_s: seg_start_time,
             end_time_s: seg_end_time,
             quality: visqol_result.into(),
-            snr,
             dropouts,
             level_ref,
             level_deg,

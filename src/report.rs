@@ -40,8 +40,6 @@ pub struct SegmentResult {
     pub end_time_s: f64,
     /// 质量评估结��（ViSQOL 兼容指标）
     pub quality: QualityResult,
-    /// SNR 结果
-    pub snr: SnrResult,
     /// 卡顿检测结果
     pub dropouts: DropoutResult,
     /// 参考音频幅值统计
@@ -50,7 +48,6 @@ pub struct SegmentResult {
     pub level_deg: LevelResult,
     /// ViSQOL 频段能量比（fvdegenergy）
     pub band_energy_ratios: Vec<f64>,
-
 }
 
 /// ViSQOL 频段能量比（fvdegenergy）
@@ -69,8 +66,6 @@ pub struct OverallStats {
     pub moslqo_stddev: f64,
     /// VNSIM 均值
     pub vnsim_mean: f64,
-    /// SNR 均值 (dB)
-    pub snr_mean_db: f64,
 }
 
 /// 完整评估报告
@@ -116,7 +111,7 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
         return OverallStats {
             segment_count: 0,
             moslqo_mean: 0.0, moslqo_min: 0.0, moslqo_max: 0.0, moslqo_stddev: 0.0,
-            vnsim_mean: 0.0, snr_mean_db: 0.0,
+            vnsim_mean: 0.0,
         };
     }
 
@@ -128,7 +123,6 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
     let mos_stddev = mos_var.sqrt();
 
     let vnsim_mean = segments.iter().map(|s| s.quality.vnsim).sum::<f64>() / n as f64;
-    let snr_mean = segments.iter().map(|s| s.snr.snr_db).sum::<f64>() / n as f64;
 
     OverallStats {
         segment_count: n,
@@ -137,7 +131,6 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
         moslqo_max: mos_max,
         moslqo_stddev: mos_stddev,
         vnsim_mean,
-        snr_mean_db: snr_mean,
     }
 }
 
