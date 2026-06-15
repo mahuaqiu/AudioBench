@@ -10,6 +10,7 @@ mod audio_io;
 mod metrics;
 mod visqol;
 mod report;
+mod html_report;
 
 use clap::Parser;
 use std::fs;
@@ -33,6 +34,9 @@ struct Args {
     /// 输出 JSON 报告文件路径（可选）
     #[clap(long = "output", short = 'o')]
     output: Option<PathBuf>,
+
+    #[clap(long = "html")]
+    html: Option<PathBuf>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -132,7 +136,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // ViSQOL 频段能量比（fvdegenergy）
         let band_energy_ratios = visqol_result.fvdegenergy.clone();
 
-
         println!("      MOS-LQO: {:.2}, VNSIM: {:.4}", 
                  visqol_result.moslqo, visqol_result.vnsim);
 
@@ -167,7 +170,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             level_ref,
             level_deg,
             band_energy_ratios,
-
         });
     }
     
@@ -204,6 +206,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("JSON 序列化失败: {}", e))?;
         fs::write(&output_path, json)?;
         println!("\n[+] JSON 报告已保存: {:?}", output_path);
+
+    // 输出 HTML 报告
+    if let Some(html_path) = args.html {
+        let html = html_report::generate_html_report(&report);
+        fs::write(&html_path, html)?;
+        println!("\n[+] HTML 报告已保存: {:?}", html_path);
+    }
     }
     
     Ok(())
