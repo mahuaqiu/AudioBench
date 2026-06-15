@@ -204,7 +204,7 @@ pub fn evaluate_with_visqol(
     let mut result = parse_csv_results(&temp_csv)?;
 
     // 尝试从JSON获取patch信息（可选，失败不影响主流程）
-    result.patch_sims = parse_patch_from_json(&temp_json);
+    result.patch_sims = parse_patch_from_json(&temp_json, result.fvnsim.len());
 
     // 清理临时文件
     let _ = fs::remove_file(&temp_csv);
@@ -294,45 +294,73 @@ fn parse_csv_results(csv_path: &Path) -> Result<VisqolResult, String> {
 }
 
 /// 从JSON调试文件解析patch信息
-fn parse_patch_from_json(json_path: &Path) -> Vec<PatchSimilarityResult> {
+/// ViSQOL protobuf 序列化的 JSON 结构:
+/// [similarity, freq_band_means[], ref_start_time, ref_end_time, deg_start_time, deg_end_time]
+/// 频段数量 = fvnsim.len()
+fn parse_patch_from_json(json_path: &Path, num_bands: usize) -> Vec<PatchSimilarityResult> {
     let content = match fs::read_to_string(json_path) {
         Ok(c) => c,
-        Err(_) => return vec![],
+        Err(e) => {
+            println!("[DEBUG] 读取 JSON 文件失败: {}", e);
+            return vec![];
+        }
     };
 
-    // 打印JSON内容长度用于调试
-    println!("[DEBUG] ViSQOL JSON 内容长度: {} bytes", content.len());
+    println!("[DEBUG] ViSQOL JSON 内容长度: {} bytes, 频段数: {}", content.len(), num_bands);
     
     // 解析JSON，尝试多个可能的字段名
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-        let field_names = ["patchSims", "patch_sims", "patch_similarities", "nsims", "similarities"];
-        
-        for field_name in field_names {
+    let field_names = ["patchSims", "patch_sims", "patch_similarities", "nsims", "similarities"];
+    
+    for field_name in field_names {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
             if let Some(patches) = json.get(field_name).and_then(|p| p.as_array()) {
                 println!("[DEBUG] 找到字段 '{}', patch数量: {}", field_name, patches.len());
                 let mut results = Vec::new();
                 for patch in patches {
                     if let Some(arr) = patch.as_array() {
-                        if arr.len() >= 5 {
+                        // 数组结构: [similarity, freq_band_means[0~N-1], ref_start, ref_end, deg_start, deg_end]
+                        // 索引: 0=similarity, 1~N=freq_band_means, N+1=ref_start, N+2=ref_end, N+3=deg_start, N+4=deg_end
+                        let idx_ref_start = 1 + num_bands;
+                        let idx_ref_end = idx_ref_start + 1;
+                        let idx_deg_start = idx_ref_end + 1;
+                        let idx_deg_end = idx_deg_start + 1;
+                        
+                        if arr.len() > idx_deg_end {
                             results.push(PatchSimilarityResult {
                                 similarity: arr[0].as_f64().unwrap_or(0.0),
-                                ref_patch_start_time: arr[1].as_f64().unwrap_or(0.0),
-                                ref_patch_end_time: arr[2].as_f64().unwrap_or(0.0),
-                                deg_patch_start_time: arr[3].as_f64().unwrap_or(0.0),
-                                deg_patch_end_time: arr[4].as_f64().unwrap_or(0.0),
+                                ref_patch_start_time: arr[idx_ref_start].as_f64().unwrap_or(0.0),
+                                ref_patch_end_time: arr[idx_ref_end].as_f64().unwrap_or(0.0),
+                                deg_patch_start_time: arr[idx_deg_start].as_f64().unwrap_or(0.0),
+                                deg_patch_end_time: arr[idx_deg_end].as_f64().unwrap_or(0.0),
                             });
+                        } else {
+                            // 尝试用固定��移 32（常见频段数）
+                            let fixed_offset = 1 + 32;
+                            if arr.len() > fixed_offset + 4 {
+                                println!("[DEBUG] 使用固定偏移 {}, 数组长度: {}", fixed_offset, arr.len());
+                                results.push(PatchSimilarityResult {
+                                    similarity: arr[0].as_f64().unwrap_or(0.0),
+                                    ref_patch_start_time: arr[fixed_offset].as_f64().unwrap_or(0.0),
+                                    ref_patch_end_time: arr[fixed_offset + 1].as_f64().unwrap_or(0.0),
+                                    deg_patch_start_time: arr[fixed_offset + 2].as_f64().unwrap_or(0.0),
+                                    deg_patch_end_time: arr[fixed_offset + 3].as_f64().unwrap_or(0.0),
+                                });
+                            }
                         }
                     }
                 }
                 if !results.is_empty() {
+                    println!("[DEBUG] 成功解析 {} 个 patch", results.len());
                     return results;
                 }
             }
         }
         
         // 打印所有顶层键用于调试
-        if let Some(obj) = json.as_object() {
-            println!("[DEBUG] JSON顶层键: {:?}", obj.keys().collect::<Vec<_>>());
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(obj) = json.as_object() {
+                println!("[DEBUG] JSON顶层键: {:?}", obj.keys().collect::<Vec<_>>());
+            }
         }
     }
 
