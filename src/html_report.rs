@@ -5,48 +5,57 @@ use crate::report::EvaluationReport;
 
 /// 生成 HTML 报告
 pub fn generate_html_report(report: &EvaluationReport) -> String {
+    // 将所有数据序列化为 JSON
     let json_data = serde_json::to_string(report).unwrap_or_else(|_| "{}".to_string());
-    
+
+    // 准备各图表数据
     let seg_labels: Vec<String> = report.segments.iter()
         .enumerate()
         .map(|(i, _)| format!("第{}段", i + 1))
         .collect();
-    
     let mos_values: Vec<f64> = report.segments.iter().map(|s| s.quality.moslqo).collect();
     let vnsim_values: Vec<f64> = report.segments.iter().map(|s| s.quality.vnsim).collect();
-    
-    // fVNSIM 数据（多段叠加到折线图）
-    let fvnsim_datasets: Vec<String> = report.segments.iter().enumerate().map(|(i, seg)| {
-        let data: Vec<f64> = seg.quality.fvnsim.iter().take(32).cloned().collect();
-        let color = match i % 4 { 0 => "#3182ce", 1 => "#e53e3e", 2 => "#38a169", _ => "#d69e2e" };
-        format!("{{label:'第{}段',data:{:?},borderColor:'{}',fill:false,tension:0.3}}", 
-            i + 1, data, color)
-    }).collect();
-    
+
+    // fVNSIM 数据
+    let fvnsim_data: Vec<Vec<f64>> = report.segments.iter()
+        .map(|seg| seg.quality.fvnsim.iter().take(32).cloned().collect())
+        .collect();
+
+    // 频段���量比
+    let energy_data: Vec<Vec<f64>> = report.segments.iter()
+        .map(|seg| seg.band_energy_ratios.iter().take(32).cloned().collect())
+        .collect();
+
     // Patch 相似度
-    let patch_datasets: Vec<String> = report.segments.iter().enumerate().map(|(i, seg)| {
-        let data: Vec<f64> = seg.quality.patch_sims.iter().map(|p| p.similarity).collect();
-        let color = match i % 4 { 0 => "#3182ce", 1 => "#e53e3e", 2 => "#38a169", _ => "#d69e2e" };
-        format!("{{label:'第{}段',data:{:?},borderColor:'{}',fill:false,tension:0.3}}", 
-            i + 1, data, color)
-    }).collect();
-    
+    let patch_data: Vec<Vec<f64>> = report.segments.iter()
+        .map(|seg| seg.quality.patch_sims.iter().map(|p| p.similarity).collect())
+        .collect();
+
     // 表格行
     let table_rows = generate_table_rows(report);
-    
-    // 频段能量比
-    let energy_datasets: Vec<String> = report.segments.iter().enumerate().map(|(i, seg)| {
-        let data: Vec<f64> = seg.band_energy_ratios.iter().take(32).cloned().collect();
-        let color = match i % 4 { 0 => "#3182ce", 1 => "#e53e3e", 2 => "#38a169", _ => "#d69e2e" };
-        format!("{{label:'第{}段',data:{:?},borderColor:'{}',fill:false,tension:0.3}}", 
-            i + 1, data, color)
-    }).collect();
 
-    let fvnsim_json = fvnsim_datasets.join(",");
-    let energy_json = energy_datasets.join(",");
-    let patch_json = patch_datasets.join(",");
+    // JSON 序列化各个数据数组
+    let seg_labels_json = serde_json::to_string(&seg_labels).unwrap_or("[]".to_string());
+    let mos_values_json = serde_json::to_string(&mos_values).unwrap_or("[]".to_string());
+    let vnsim_values_json = serde_json::to_string(&vnsim_values).unwrap_or("[]".to_string());
+    let fvnsim_json = serde_json::to_string(&fvnsim_data).unwrap_or("[]".to_string());
+    let energy_json = serde_json::to_string(&energy_data).unwrap_or("[]".to_string());
+    let patch_json = serde_json::to_string(&patch_data).unwrap_or("[]".to_string());
 
-    format!(r#"<!DOCTYPE html>
+    // 卡顿统计
+    let dropout_count: usize = report.segments.iter().map(|s| s.dropouts.count).sum();
+    let dropout_dur: f64 = report.segments.iter().map(|s| s.dropouts.total_duration_ms).sum();
+
+    // 模式名称
+    let mode_name = if report.config.target_sample_rate == 16000 { "语音模式" } else { "音频模式" };
+
+    // 把 JSON 数据转换为 JS 字符串字面量（单引号包裹，内部单引号转义）
+    fn to_js_str(s: &str) -> String {
+        format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+
+    format!(
+        r#"<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -71,9 +80,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
   .section {{ background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:24px; }}
   .section-title {{ font-size:16px; font-weight:600; margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--border); }}
   .chart-full {{ position:relative; height:280px; }}
-  .chart-row {{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }}
-  .chart-wrap {{ position:relative; height:280px; }}
-  @media(max-width:768px){{.chart-row{{grid-template-columns:1fr}}}}
+  @media(max-width:768px){{}}
   table{{width:100%;border-collapse:collapse;font-size:13px}}
   th,td{{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}}
   th{{font-weight:600;color:var(--text2);background:#f7fafc}}
@@ -101,7 +108,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div><span class="label">采样率：</span><span class="value">{sample_rate}Hz（{mode}）</span></div>
 <div><span class="label">对齐延迟：</span><span class="value">{delay_ms:.1}ms</span></div>
 <div><span class="label">对齐置信度：</span><span class="value">{conf:.1}%</span></div>
-<div><span class="label">分段数量：</span><span class="value">{seg_count}</span></div>
+<div><span class="label">分��数量：</span><span class="value">{seg_count}</span></div>
 </div>
 </div>
 
@@ -169,21 +176,63 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 
 <script>
-const REPORT = {json_data};
-const segLabels = {seg_labels_json};
-const mosValues = {mos_values_json};
-const vnsimValues = {vnsim_values_json};
-const bandLabels = Array.from({{length:32}},(_,i)=>'B'+(i+1));
+var REPORT = JSON.parse({report_json});
+var segLabels = JSON.parse({seg_labels_json});
+var mosValues = JSON.parse({mos_values_json});
+var vnsimValues = JSON.parse({vnsim_values_json});
+var fvnsimData = JSON.parse({fvnsim_json});
+var energyData = JSON.parse({energy_json});
+var patchData = JSON.parse({patch_json});
 
-new Chart(document.getElementById('chartMos'),{{type:'line',data:{{labels:segLabels,datasets:[{{label:'MOS-LQO',data:mosValues,borderColor:'#3182ce',backgroundColor:'rgba(49,130,206,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}}}}}});
+var segColors = ['#3182ce','#e53e3e','#38a169','#d69e2e','#805ad5','#dd6b20','#319795','#b83280'];
 
-new Chart(document.getElementById('chartVnsim'),{{type:'line',data:{{labels:segLabels,datasets:[{{label:'VNSIM',data:vnsimValues,borderColor:'#38a169',backgroundColor:'rgba(56,161,105,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}}}}}});
+// MOS-LQO 分段趋势
+new Chart(document.getElementById('chartMos'),{{
+  type:'line',
+  data:{{labels:segLabels,datasets:[{{label:'MOS-LQO',data:mosValues,borderColor:'#3182ce',backgroundColor:'rgba(49,130,206,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}}}}}}
+}});
 
-new Chart(document.getElementById('chartFvnsim'),{{type:'line',data:{{labels:bandLabels,datasets:[{fvnsim_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}}}}}});
+// VNSIM 分段趋势
+new Chart(document.getElementById('chartVnsim'),{{
+  type:'line',
+  data:{{labels:segLabels,datasets:[{{label:'VNSIM',data:vnsimValues,borderColor:'#38a169',backgroundColor:'rgba(56,161,105,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}}}}}}
+}});
 
-new Chart(document.getElementById('chartEnergy'),{{type:'line',data:{{labels:bandLabels,datasets:[{energy_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}}}}}});
+// fVNSIM 频段相似度
+var fvnsimDatasets = fvnsimData.map(function(d,i){{
+  return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
+}});
+var bandLabels = Array.from({{length:32}},function(_,i){{return 'B'+(i+1);}});
+new Chart(document.getElementById('chartFvnsim'),{{
+  type:'line',
+  data:{{labels:bandLabels,datasets:fvnsimDatasets}},
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}}}}}}
+}});
 
-new Chart(document.getElementById('chartPatch'),{{type:'line',data:{{labels:REPORT.segments&&REPORT.segments[0]&&REPORT.segments[0].quality&&REPORT.segments[0].quality.patch_sims?REPORT.segments[0].quality.patch_sims.map((_,i)=>'Patch'+(i+1)):[],datasets:[{patch_json}]}},options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}}}}}});
+// 频段能量比
+var energyDatasets = energyData.map(function(d,i){{
+  return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
+}});
+new Chart(document.getElementById('chartEnergy'),{{
+  type:'line',
+  data:{{labels:bandLabels,datasets:energyDatasets}},
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}}}}}}
+}});
+
+// Patch 时间片段相似度
+if(patchData.length > 0 && patchData[0].length > 0){{
+  var allPatchLabels = patchData[0].map(function(_,i){{return 'Patch'+(i+1);}});
+  var patchDatasets = patchData.map(function(d,i){{
+    return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
+  }});
+  new Chart(document.getElementById('chartPatch'),{{
+    type:'line',
+    data:{{labels:allPatchLabels,datasets:patchDatasets}},
+    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}}}}}}
+  }});
+}}
 </script>
 </body>
 </html>"#,
@@ -193,7 +242,7 @@ new Chart(document.getElementById('chartPatch'),{{type:'line',data:{{labels:REPO
         ref_dur = report.reference_duration_s,
         deg_dur = report.recorded_duration_s,
         sample_rate = report.config.target_sample_rate,
-        mode = if report.config.target_sample_rate == 16000 { "语音模式" } else { "音频模式" },
+        mode = mode_name,
         delay_ms = report.alignment.delay_ms,
         conf = report.alignment.confidence * 100.0,
         seg_count = report.segments.len(),
@@ -201,45 +250,43 @@ new Chart(document.getElementById('chartPatch'),{{type:'line',data:{{labels:REPO
         mos_min = report.overall.moslqo_min,
         mos_max = report.overall.moslqo_max,
         vnsim_mean = report.overall.vnsim_mean,
-        dropout_count = report.segments.iter().map(|s| s.dropouts.count).sum::<usize>(),
-        dropout_dur = report.segments.iter().map(|s| s.dropouts.total_duration_ms).sum::<f64>(),
-        json_data = json_data,
-        seg_labels_json = serde_json::to_string(&seg_labels).unwrap_or("[]".to_string()),
-        mos_values_json = serde_json::to_string(&mos_values).unwrap_or("[]".to_string()),
-        vnsim_values_json = serde_json::to_string(&vnsim_values).unwrap_or("[]".to_string()),
-        fvnsim_json = fvnsim_json,
-        energy_json = energy_json,
-        patch_json = patch_json,
+        dropout_count = dropout_count,
+        dropout_dur = dropout_dur,
+        // JS 字符串字面量注入
+        report_json = to_js_str(&json_data),
+        seg_labels_json = to_js_str(&seg_labels_json),
+        mos_values_json = to_js_str(&mos_values_json),
+        vnsim_values_json = to_js_str(&vnsim_values_json),
+        fvnsim_json = to_js_str(&fvnsim_json),
+        energy_json = to_js_str(&energy_json),
+        patch_json = to_js_str(&patch_json),
         table_rows = table_rows,
     )
 }
 
-/// 生成可读的时间戳（年-月-日 时:分:秒）
+
+/// 生成可读的时��戳
 fn format_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    // 手动计算年月日时分秒（无外部依赖）
     let days_since_epoch = secs / 86400;
     let time_of_day = secs % 86400;
     let hour = (time_of_day / 3600) as u32;
     let minute = ((time_of_day % 3600) / 60) as u32;
     let second = (time_of_day % 60) as u32;
-    // 计算年月日（基于闰年规则）
     let (year, month, day) = days_to_ymd(days_since_epoch);
     format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", year, month, day, hour, minute, second)
 }
 
-/// 将自 1970-01-01 以来的天数转换为 (年, 月, 日)
+/// 天数转日期
 fn days_to_ymd(mut days: u64) -> (u32, u32, u32) {
     let mut year = 1970u32;
     loop {
         let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
+        if days < days_in_year { break; }
         days -= days_in_year;
         year += 1;
     }
@@ -247,9 +294,7 @@ fn days_to_ymd(mut days: u64) -> (u32, u32, u32) {
     let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let mut month = 1u32;
     for &md in &month_days {
-        if days < md {
-            break;
-        }
+        if days < md { break; }
         days -= md;
         month += 1;
     }

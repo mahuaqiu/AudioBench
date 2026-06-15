@@ -27,9 +27,9 @@ struct Args {
     #[clap(long = "recorded", short = 'c', required = true)]
     recorded: PathBuf,
 
-    /// 强制使用语音模式 (16kHz)，默认使用音频模式 (48kHz)
-    #[clap(long = "speech")]
-    speech: bool,
+    /// 使用音频模式 (48kHz)，默认使用语音模式 (16kHz)
+    #[clap(long = "audio")]
+    audio: bool,
 
     /// 输出 JSON 报告文件路径（可选）
     #[clap(long = "output", short = 'o')]
@@ -61,10 +61,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
              rec_audio.sample_rate, rec_audio.duration_secs());
 
     // 自动选择 ViSQOL 模式并重采样
-    let target_rate = if args.speech { 16000 } else { 48000 };
-    let mode = if args.speech { visqol::VisqolMode::Speech } else { visqol::VisqolMode::Audio };
+    let target_rate = if args.audio { 48000 } else { 16000 };
+    let mode = if args.audio { visqol::VisqolMode::Audio } else { visqol::VisqolMode::Speech };
     
-    let mode_name = if args.speech { "语音模式" } else { "音频模式" };
+    let mode_name = if args.audio { "音频模式" } else { "语音模式" };
     println!("[*] ViSQOL 模式: {}Hz ({})", target_rate, mode_name);
     // 重采样到 ViSQOL 所需采样率
     let ref_audio = ref_audio.resample(target_rate)?;
