@@ -1,19 +1,18 @@
-//! 构建脚本：在编译时处理 visqol 二进制嵌入
-//!
-//! 如果 bin/visqol 不存在，创建一个小的占位文件
+//! 构建脚本：在编译时处理 visqol 二进制和模型文件嵌入
 
 use std::env;
 use std::fs;
 use std::path::Path;
 
 fn main() {
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+
     // 根据目标平台选择二进制文件
     #[cfg(target_os = "windows")]
     let bin_file = "bin/visqol.exe";
     #[cfg(not(target_os = "windows"))]
     let bin_file = "bin/visqol";
 
-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let bin_path = Path::new(&manifest_dir).join(bin_file);
     let bin_dir = bin_path.parent().unwrap();
 
@@ -22,19 +21,44 @@ fn main() {
         let _ = fs::create_dir_all(bin_dir);
     }
 
-    // 如果文件不存在，创建一个小的占位文件
+    // 如果 visqol 二进制不存在，创建占位文件
     if !bin_path.exists() {
         println!("cargo:warning=visqol 二进制文件不存在: {:?}，创建占位文件", bin_path);
-        // 创建一个小的占位文件（至少有一些内容）
         let placeholder = b"AUDIOBENCH_PLACEHOLDER_VISQOL_BINARY";
         fs::write(&bin_path, placeholder).expect("无法创建占位文件");
     }
 
-    // 读取二进制文件内容
-    let data = fs::read(&bin_path).expect("无法读取 visqol 二进制文件");
+    // 计算 visqol 二进制 hash
+    let bin_data = fs::read(&bin_path).expect("无法读取 visqol 二进制文件");
+    let bin_hash = format!("{:016x}", bin_data.len());
+    println!("cargo:rustc-env=VISQOL_BIN_HASH={}", bin_hash);
+    println!("cargo:warning=visqol 二进制: {} (size: {} bytes)", bin_file, bin_data.len());
 
-    // 计算 hash（使用简单的哈希）
-    let hash = format!("{:016x}", data.len());
-    println!("cargo:rustc-env=VISQOL_BIN_HASH={}", hash);
-    println!("cargo:warning=visqol 二进制: {} (size: {} bytes)", bin_file, data.len());
+    // 确保模型目录存在
+    let model_dir = Path::new(&manifest_dir).join("bin/model");
+    if !model_dir.exists() {
+        let _ = fs::create_dir_all(&model_dir);
+    }
+
+    // 处理音频模式 SVM 模型
+    let audio_model_path = model_dir.join("libsvm_nu_svr_model.txt");
+    if !audio_model_path.exists() {
+        println!("cargo:warning=ViSQOL 音频模型文件不存在: {:?}，创建占位文件", audio_model_path);
+        fs::write(&audio_model_path, b"PLACEHOLDER_AUDIO_MODEL").expect("无法创建占位文件");
+    }
+    let audio_model_data = fs::read(&audio_model_path).expect("无法读取音频模型文件");
+    let audio_model_hash = format!("{:016x}", audio_model_data.len());
+    println!("cargo:rustc-env=VISQOL_AUDIO_MODEL_HASH={}", audio_model_hash);
+    println!("cargo:warning=ViSQOL 音频模型: {} bytes", audio_model_data.len());
+
+    // 处理语音模式 TFLite 模型
+    let speech_model_path = model_dir.join("lattice_tcditugenmeetpackhref_ls2_nl60_lr12_bs2048_learn.005_ep2400_train1_7_raw.tflite");
+    if !speech_model_path.exists() {
+        println!("cargo:warning=ViSQOL 语音模型文件不存在: {:?}，创建占位文件", speech_model_path);
+        fs::write(&speech_model_path, b"PLACEHOLDER_SPEECH_MODEL").expect("无法创建占位文件");
+    }
+    let speech_model_data = fs::read(&speech_model_path).expect("无法读取语音模型文件");
+    let speech_model_hash = format!("{:016x}", speech_model_data.len());
+    println!("cargo:rustc-env=VISQOL_SPEECH_MODEL_HASH={}", speech_model_hash);
+    println!("cargo:warning=ViSQOL 语音模型: {} bytes", speech_model_data.len());
 }
