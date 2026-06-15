@@ -195,11 +195,23 @@ pub fn print_console_report(report: &EvaluationReport) {
             println!("    低频相似度: {:.4}  高频相似度: {:.4}", low_sim, high_sim);
         }
 
+        // 能量比均值
+        let energy_mean = if seg.band_energy_ratios.is_empty() {
+            0.0
+        } else {
+            seg.band_energy_ratios.iter().sum::<f64>() / seg.band_energy_ratios.len() as f64
+        };
+        println!("    能量比均值: {:.4}", energy_mean);
+
         // 卡顿检测
         if seg.dropouts.count > 0 {
             println!("    卡顿: {} 次, 总时长 {:.0} ms", 
                      seg.dropouts.count, seg.dropouts.total_duration_ms);
         }
+
+        // 幅值统计
+        println!("    参考幅值: RMS={:.4}, 峰值={:.4}", seg.level_ref.rms, seg.level_ref.peak);
+        println!("    录制幅值: RMS={:.4}, 峰值={:.4}", seg.level_deg.rms, seg.level_deg.peak);
     }
 
     println!("\n{}", "=".repeat(60));
