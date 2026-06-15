@@ -149,9 +149,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let level_ref = metrics::compute_level_stats(&ref_audio.samples);
         let level_deg = metrics::compute_level_stats(&seg_degraded);
 
-        // 诊断
-        let diagnosis = diagnose_from_visqol(&visqol_result);
-
         // 清理临时文件
         let _ = fs::remove_file(&ref_temp);
         let _ = fs::remove_file(&deg_temp);
@@ -165,7 +162,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dropouts,
             level_ref,
             level_deg,
-            diagnosis,
         });
     }
     
@@ -205,51 +201,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     Ok(())
-}
-
-/// 从 visqol 结果生成诊断信息
-fn diagnose_from_visqol(result: &visqol::VisqolResult) -> report::DiagnosisResult {
-    let quality_rating = match result.moslqo {
-        s if s >= 4.5 => "优秀",
-        s if s >= 4.0 => "良好",
-        s if s >= 3.5 => "一般",
-        s if s >= 3.0 => "较差",
-        s if s >= 2.0 => "差",
-        _ => "极差",
-    }.to_string();
-    
-    let low_count = (result.fvnsim.len() / 3).max(1);
-    let high_count = result.fvnsim.len().saturating_sub(result.fvnsim.len() * 2 / 3);
-    let low_freq_similarity = result.fvnsim.iter().take(low_count).sum::<f64>() / low_count as f64;
-    let high_freq_similarity = if high_count > 0 {
-        result.fvnsim.iter().rev().take(high_count).sum::<f64>() / high_count as f64
-    } else { result.vnsim };
-    
-    let background_noise_detected = result.vnsim < 0.85 && low_freq_similarity < 0.80;
-    let high_freq_loss_detected = high_freq_similarity < low_freq_similarity * 0.8 && high_freq_similarity < 0.75;
-    
-    let worst_patch = result.patch_sims.iter()
-        .min_by(|a, b| a.similarity.partial_cmp(&b.similarity).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|p| (p.similarity, p.ref_patch_start_time, p.ref_patch_end_time));
-    
-    let avg_sim = if !result.patch_sims.is_empty() {
-        result.patch_sims.iter().map(|p| p.similarity).sum::<f64>() / result.patch_sims.len() as f64
-    } else { result.vnsim };
-    
-    let intermittent_artifacts_detected = worst_patch.map(|(sim, _, _)| sim < avg_sim * 0.7).unwrap_or(false);
-    let freq_stability = if !result.fstdnsim.is_empty() {
-        result.fstdnsim.iter().sum::<f64>() / result.fstdnsim.len() as f64
-    } else { 0.0 };
-    
-    report::DiagnosisResult {
-        quality_rating,
-        mos_score: result.moslqo,
-        background_noise_detected,
-        high_freq_loss_detected,
-        intermittent_artifacts_detected,
-        low_freq_similarity,
-        high_freq_similarity,
-        worst_patch,
-        freq_stability,
-    }
 }

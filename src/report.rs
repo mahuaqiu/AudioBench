@@ -38,9 +38,8 @@ pub struct SegmentResult {
     pub start_time_s: f64,
     /// 分段在录制音频中的结束时间（秒）
     pub end_time_s: f64,
-    /// 质量评估结果（ViSQOL 兼容指标）
+    /// 质量评估结��（ViSQOL 兼容指标）
     pub quality: QualityResult,
-    /// 诊断结果
     /// SNR 结果
     pub snr: SnrResult,
     /// 卡顿检测结果
@@ -49,8 +48,6 @@ pub struct SegmentResult {
     pub level_ref: LevelResult,
     /// 录制音频幅值统计
     pub level_deg: LevelResult,
-    /// 诊断结果
-    pub diagnosis: DiagnosisResult,
 }
 
 /// 整体统计汇总
@@ -70,18 +67,6 @@ pub struct OverallStats {
     pub vnsim_mean: f64,
     /// SNR 均值 (dB)
     pub snr_mean_db: f64,
-    /// 总卡顿次数
-    pub total_dropout_count: usize,
-    /// 总卡顿时长 (ms)
-    pub total_dropout_duration_ms: f64,
-    /// 背景噪声检出段数
-    pub segments_with_noise: usize,
-    /// 高频损失检出段数
-    pub segments_with_hf_loss: usize,
-    /// 间歇性杂音检出段数
-    pub segments_with_artifacts: usize,
-    /// 整体质量评级
-    pub overall_rating: String,
 }
 
 /// 完整评估报告
@@ -128,9 +113,6 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
             segment_count: 0,
             moslqo_mean: 0.0, moslqo_min: 0.0, moslqo_max: 0.0, moslqo_stddev: 0.0,
             vnsim_mean: 0.0, snr_mean_db: 0.0,
-            total_dropout_count: 0, total_dropout_duration_ms: 0.0,
-            segments_with_noise: 0, segments_with_hf_loss: 0, segments_with_artifacts: 0,
-            overall_rating: "无数据".to_string(),
         };
     }
 
@@ -144,22 +126,6 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
     let vnsim_mean = segments.iter().map(|s| s.quality.vnsim).sum::<f64>() / n as f64;
     let snr_mean = segments.iter().map(|s| s.snr.snr_db).sum::<f64>() / n as f64;
 
-    let total_dropout_count: usize = segments.iter().map(|s| s.dropouts.count).sum();
-    let total_dropout_duration_ms: f64 = segments.iter().map(|s| s.dropouts.total_duration_ms).sum();
-
-    let segments_with_noise = segments.iter().filter(|s| s.diagnosis.background_noise_detected).count();
-    let segments_with_hf_loss = segments.iter().filter(|s| s.diagnosis.high_freq_loss_detected).count();
-    let segments_with_artifacts = segments.iter().filter(|s| s.diagnosis.intermittent_artifacts_detected).count();
-
-    let overall_rating = match mos_mean {
-        s if s >= 4.5 => "优秀".to_string(),
-        s if s >= 4.0 => "良好".to_string(),
-        s if s >= 3.5 => "一般".to_string(),
-        s if s >= 3.0 => "较差".to_string(),
-        s if s >= 2.0 => "差".to_string(),
-        _ => "极差".to_string(),
-    };
-
     OverallStats {
         segment_count: n,
         moslqo_mean: mos_mean,
@@ -168,12 +134,6 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
         moslqo_stddev: mos_stddev,
         vnsim_mean,
         snr_mean_db: snr_mean,
-        total_dropout_count,
-        total_dropout_duration_ms,
-        segments_with_noise,
-        segments_with_hf_loss,
-        segments_with_artifacts,
-        overall_rating,
     }
 }
 
@@ -206,25 +166,6 @@ pub fn print_console_report(report: &EvaluationReport) {
              o.moslqo_mean, o.moslqo_min, o.moslqo_max, o.moslqo_stddev);
     println!("  VNSIM 均值: {:.4}", o.vnsim_mean);
     println!("  SNR 均值: {:.1} dB", o.snr_mean_db);
-    println!("  整体评级: {}", o.overall_rating);
-
-    // 问题统计
-    if o.segments_with_noise > 0 || o.segments_with_hf_loss > 0 || o.segments_with_artifacts > 0 {
-        println!("\n【问题统计】");
-        if o.segments_with_noise > 0 {
-            println!("  背景噪声检出: {}/{} 段", o.segments_with_noise, o.segment_count);
-        }
-        if o.segments_with_hf_loss > 0 {
-            println!("  高频损失检出: {}/{} 段", o.segments_with_hf_loss, o.segment_count);
-        }
-        if o.segments_with_artifacts > 0 {
-            println!("  间歇性杂音检出: {}/{} 段", o.segments_with_artifacts, o.segment_count);
-        }
-        if o.total_dropout_count > 0 {
-            println!("  卡顿/丢包: {} 次, 总时长 {:.1} ms", 
-                     o.total_dropout_count, o.total_dropout_duration_ms);
-        }
-    }
 
     // 各段详细结果
     println!("\n{}", "-".repeat(60));
@@ -237,7 +178,6 @@ pub fn print_console_report(report: &EvaluationReport) {
                  seg.start_time_s, seg.end_time_s);
         println!("    MOS-LQO: {:.2}  VNSIM: {:.4}  SNR: {:.1} dB",
                  seg.quality.moslqo, seg.quality.vnsim, seg.snr.snr_db);
-        println!("    评级: {}", seg.diagnosis.quality_rating);
 
         // 频段分析摘要
         if !seg.quality.fvnsim.is_empty() {
@@ -252,40 +192,12 @@ pub fn print_console_report(report: &EvaluationReport) {
             println!("    低频相似度: {:.4}  高频相似度: {:.4}", low_sim, high_sim);
         }
 
-        // 诊断
-        let mut issues = Vec::new();
-        if seg.diagnosis.background_noise_detected { issues.push("背景噪声".to_string()); }
-        if seg.diagnosis.high_freq_loss_detected { issues.push("高频损失".to_string()); }
-        if seg.diagnosis.intermittent_artifacts_detected { issues.push("间歇性杂音".to_string()); }
+        // 卡顿检测
         if seg.dropouts.count > 0 {
-            let dropout_msg = format!("卡顿{}次({:.0}ms)", seg.dropouts.count, seg.dropouts.total_duration_ms);
-            issues.push(dropout_msg);
-        }
-        if issues.is_empty() {
-            println!("    诊断: 无明显异常");
-        } else {
-            println!("    诊断: {}", issues.join(", "));
-        }
-
-        // 最差 patch
-        if let Some((worst_sim, start, end)) = seg.diagnosis.worst_patch {
-            println!("    最差 patch: 相似度 {:.4}, 时间 {:.2}s - {:.2}s", worst_sim, start, end);
+            println!("    卡顿: {} 次, 总时长 {:.0} ms", 
+                     seg.dropouts.count, seg.dropouts.total_duration_ms);
         }
     }
 
     println!("\n{}", "=".repeat(60));
-}
-
-/// 诊断结果
-#[derive(Debug, Clone, Serialize)]
-pub struct DiagnosisResult {
-    pub quality_rating: String,
-    pub mos_score: f64,
-    pub background_noise_detected: bool,
-    pub high_freq_loss_detected: bool,
-    pub intermittent_artifacts_detected: bool,
-    pub low_freq_similarity: f64,
-    pub high_freq_similarity: f64,
-    pub worst_patch: Option<(f64, f64, f64)>,
-    pub freq_stability: f64,
 }
