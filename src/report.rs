@@ -169,7 +169,6 @@ pub fn print_console_report(report: &EvaluationReport) {
     println!("  MOS-LQO: 均值={:.2}, 最小={:.2}, 最大={:.2}, 标准差={:.2}",
              o.moslqo_mean, o.moslqo_min, o.moslqo_max, o.moslqo_stddev);
     println!("  VNSIM 均值: {:.4}", o.vnsim_mean);
-    println!("  SNR 均值: {:.1} dB", o.snr_mean_db);
 
     // 各段详细结果
     println!("\n{}", "-".repeat(60));
@@ -180,8 +179,8 @@ pub fn print_console_report(report: &EvaluationReport) {
         println!("\n  第 {}/{} 段 ({:.2}s - {:.2}s)", 
                  seg.segment_index + 1, report.segments.len(),
                  seg.start_time_s, seg.end_time_s);
-        println!("    MOS-LQO: {:.2}  VNSIM: {:.4}  SNR: {:.1} dB",
-                 seg.quality.moslqo, seg.quality.vnsim, seg.snr.snr_db);
+        println!("    MOS-LQO: {:.2}  VNSIM: {:.4}",
+                 seg.quality.moslqo, seg.quality.vnsim);
 
         // 频段分析摘要
         if !seg.quality.fvnsim.is_empty() {
