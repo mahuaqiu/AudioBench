@@ -300,24 +300,39 @@ fn parse_patch_from_json(json_path: &Path) -> Vec<PatchSimilarityResult> {
         Err(_) => return vec![],
     };
 
-    // 使用 serde_json 解析 patch_sims
+    // 打印JSON内容长度用于调试
+    println!("[DEBUG] ViSQOL JSON 内容长度: {} bytes", content.len());
+    
+    // 解析JSON，尝试多个可能的字段名
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-        if let Some(patches) = json.get("patch_sims").and_then(|p| p.as_array()) {
-            let mut results = Vec::new();
-            for patch in patches {
-                if let Some(arr) = patch.as_array() {
-                    if arr.len() >= 5 {
-                        results.push(PatchSimilarityResult {
-                            similarity: arr[0].as_f64().unwrap_or(0.0),
-                            ref_patch_start_time: arr[1].as_f64().unwrap_or(0.0),
-                            ref_patch_end_time: arr[2].as_f64().unwrap_or(0.0),
-                            deg_patch_start_time: arr[3].as_f64().unwrap_or(0.0),
-                            deg_patch_end_time: arr[4].as_f64().unwrap_or(0.0),
-                        });
+        let field_names = ["patch_sims", "patch_similarities", "nsims", "similarities"];
+        
+        for field_name in field_names {
+            if let Some(patches) = json.get(field_name).and_then(|p| p.as_array()) {
+                println!("[DEBUG] 找到字段 '{}', patch数量: {}", field_name, patches.len());
+                let mut results = Vec::new();
+                for patch in patches {
+                    if let Some(arr) = patch.as_array() {
+                        if arr.len() >= 5 {
+                            results.push(PatchSimilarityResult {
+                                similarity: arr[0].as_f64().unwrap_or(0.0),
+                                ref_patch_start_time: arr[1].as_f64().unwrap_or(0.0),
+                                ref_patch_end_time: arr[2].as_f64().unwrap_or(0.0),
+                                deg_patch_start_time: arr[3].as_f64().unwrap_or(0.0),
+                                deg_patch_end_time: arr[4].as_f64().unwrap_or(0.0),
+                            });
+                        }
                     }
                 }
+                if !results.is_empty() {
+                    return results;
+                }
             }
-            return results;
+        }
+        
+        // 打印所有顶层键用于调试
+        if let Some(obj) = json.as_object() {
+            println!("[DEBUG] JSON顶层键: {:?}", obj.keys().collect::<Vec<_>>());
         }
     }
 
