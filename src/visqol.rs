@@ -305,7 +305,7 @@ fn parse_patch_from_json(json_path: &Path) -> Vec<PatchSimilarityResult> {
     
     // 解析JSON，尝试多个可能的字段名
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-        let field_names = ["patch_sims", "patch_similarities", "nsims", "similarities"];
+        let field_names = ["patchSims", "patch_sims", "patch_similarities", "nsims", "similarities"];
         
         for field_name in field_names {
             if let Some(patches) = json.get(field_name).and_then(|p| p.as_array()) {
