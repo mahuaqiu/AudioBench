@@ -48,8 +48,12 @@ pub struct SegmentResult {
     pub level_ref: LevelResult,
     /// 录制音频幅值统计
     pub level_deg: LevelResult,
+    /// ViSQOL 频段能量比（fvdegenergy）
+    pub band_energy_ratios: Vec<f64>,
+
 }
 
+/// ViSQOL 频段能量比（fvdegenergy）
 /// 整体统计汇总
 #[derive(Debug, Serialize)]
 pub struct OverallStats {

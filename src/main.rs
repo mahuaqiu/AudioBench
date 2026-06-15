@@ -129,6 +129,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // 调用 visqol 进行评估
         let visqol_result = visqol::evaluate_with_visqol(&ref_temp, &deg_temp, mode)?;
 
+        // ViSQOL 频段能量比（fvdegenergy）
+        let band_energy_ratios = visqol_result.fvdegenergy.clone();
+
+
         println!("      MOS-LQO: {:.2}, VNSIM: {:.4}", 
                  visqol_result.moslqo, visqol_result.vnsim);
 
@@ -162,6 +166,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dropouts,
             level_ref,
             level_deg,
+            band_energy_ratios,
+
         });
     }
     
