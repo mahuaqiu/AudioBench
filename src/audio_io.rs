@@ -109,22 +109,22 @@ impl AudioData {
 }
 
 /// 写入单声道 WAV 文件（供 visqol 调用）
+/// 使用 32-bit float 格式以最大程度保留量化精度
 pub fn write_wav_mono(path: &std::path::Path, samples: &[f64], sample_rate: u32) -> Result<(), String> {
     use hound::{WavWriter, WavSpec, SampleFormat};
     
     let spec = WavSpec {
         channels: 1,
         sample_rate,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
+        bits_per_sample: 32,
+        sample_format: SampleFormat::Float,
     };
     
     let mut writer = WavWriter::create(path, spec)
         .map_err(|e| format!("创建 WAV 文件失败: {}", e))?;
     
-    let max_val = 32767.0f64;
     for &sample in samples {
-        let s = (sample * max_val).clamp(-32768.0, 32767.0) as i32;
+        let s = sample as f32;
         writer.write_sample(s)
             .map_err(|e| format!("写入采样失败: {}", e))?;
     }
