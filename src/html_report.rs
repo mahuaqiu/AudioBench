@@ -143,12 +143,12 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card">
 <div class="card-label">时域中断</div>
 <div class="card-value">{dropout_dur:.0}ms</div>
-<div class="card-hint">能量断崖/静音事件</div>
+<div class="card-hint">网络丢包/静音（能量断崖下跌）</div>
 </div>
 <div class="card">
 <div class="card-label">时轴漂移</div>
 <div class="card-value">{warping_dur:.0}ms</div>
-<div class="card-hint">段间时长偏差</div>
+<div class="card-hint">音频被拉长/压缩（抖动缓冲）</div>
 </div>
 <div class="card">
 <div class="card-label">内容截断</div>
@@ -204,11 +204,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dt><span class="tag">Patch相似度</span>时间片段相似度</dt>
 <dd>ViSQOL将音频按约0.6秒切分为多个Patch，分别计算每个Patch的NSIM。多段叠加显示便于定位问题时段。</dd>
 <dt><span class="tag">时域中断</span>Audio Dropout</dt>
-<dd>检测录制信号相对于参考信号的能量断崖式下跌（异常静音、丢包、缓冲区欠载等）。</dd>
+<dd>检测网络丢包或长时间静音导致的能量断崖下跌。</dd>
 <dt><span class="tag">时轴漂移</span>Time Warping</dt>
-<dd>检测多段对齐之间的间距偏差，反映时轴被拉伸或压缩（网络抖动、缓冲策略问题）。</dd>
+<dd>检测同一段音频内容在录制端的时长偏差，反映网络抖动导致的音频拉长/压缩。</dd>
 <dt><span class="tag">频谱损伤</span>Spectral Artifacts</dt>
-<dd>检测频域结构被破坏但时域能量正常的片段（编解码失真、PLC 算法伪造等）。</dd>
+<dd>检测时域能量正常但频域结构被破坏的片段（PLC 伪造音、编解码杂音等）。</dd>
 </dl>
 </div>
 

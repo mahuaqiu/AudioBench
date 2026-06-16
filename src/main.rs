@@ -106,6 +106,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut all_patch_sims: Vec<Vec<visqol::PatchSimilarityResult>> = Vec::new();
     // 各段实际音频样本数（不含末尾补零），用于内容截断检测
     let mut seg_actual_samples: Vec<usize> = Vec::new();
+    // 各段实际时长（秒），用于漂移检测
+    let mut seg_durations_s: Vec<f64> = Vec::new();
 
     for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
@@ -115,6 +117,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
         // 收集该段实际音频样本数（不含末尾补零），用于内容截断检测
         seg_actual_samples.push(seg_end - seg_start);
+        // 收集该段实际时长（秒），用于漂移检测
+        let seg_actual_dur_s = (seg_end - seg_start) as f64 / ref_audio.sample_rate as f64;
+        seg_durations_s.push(seg_actual_dur_s);
 
         // 调试：打印分段提取的详细信息
         let seg_samples = &rec_audio.samples[seg_start..seg_end];
@@ -207,9 +212,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 维度二：时轴漂移检测（在所有分段完成后）
-    // 采用段间间距的中位数做基准（对循环停顿不固定鲁棒），段数 < 4 时自动跳过。
+    // 直接比较每段录制时长 vs 参考时长，正值表示拉长，负值表示压缩
     let warping_events = metrics::detect_warpings(
-        &alignment_offsets,
+        &seg_durations_s,
+        ref_duration,
         metrics::WarpingThreshold::default(),
     );
 
@@ -232,11 +238,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 将时轴漂移和频谱损伤结果更新到每段报告中
     for (seg_idx, seg_result) in segment_results.iter_mut().enumerate() {
-        // 合并时轴漂移事件到对应段。
-        // 注意：每个 warping 事件只归 segment_before（前一段），避免与 segment_after 重复，
-        // 从而避免 report.rs/html_report.rs 的跨段累加把 drift_ms 翻倍。
+        // 合并时轴漂移事件到对应段
         let seg_warpings: Vec<metrics::WarpingEvent> = warping_events.iter()
-            .filter(|w| w.segment_before == seg_idx)
+            .filter(|w| w.segment_index == seg_idx)
             .cloned()
             .collect();
         let seg_warping_ms: f64 = seg_warpings.iter().map(|w| w.drift_ms.abs()).sum();

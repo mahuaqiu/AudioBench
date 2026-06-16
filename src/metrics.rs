@@ -53,20 +53,18 @@ pub struct DropoutEvent {
     pub attenuation_ratio: f64,
 }
 
-/// 时轴漂移事件（对齐间距不一致）
+/// 时轴漂移事件（段时长被拉长/压缩）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WarpingEvent {
-    /// 涉及的段索引（前一段）
-    pub segment_before: usize,
-    /// 涉及的段索引（后一段）
-    pub segment_after: usize,
-    /// 参考音频的段间间距 (ms)
-    pub ref_gap_ms: f64,
-    /// 录制音频的段间间距 (ms)
-    pub deg_gap_ms: f64,
-    /// 漂移时长 = deg_gap_ms - ref_gap_ms (ms)，正值表示拉伸
+    /// 涉及的段索引
+    pub segment_index: usize,
+    /// 参考音频该段时长 (ms)
+    pub ref_duration_ms: f64,
+    /// 录制音频该段实际时长 (ms)
+    pub deg_duration_ms: f64,
+    /// 漂移时长 = deg - ref (ms)，正值表示拉长/变慢，负值表示压缩/变快
     pub drift_ms: f64,
-    /// 漂移比例 = drift_ms / ref_gap_ms
+    /// 漂移比例 = drift_ms / ref_duration_ms
     pub drift_ratio: f64,
 }
 
@@ -394,58 +392,44 @@ impl Default for WarpingThreshold {
 
 /// 维度二：时轴漂移检测
 ///
-/// 语义：检测**多段对齐间距之间是否彼此不一致**（时轴被非均匀拉伸/压缩）。
+/// 语义：检测**同一段音频内容在录制端的时长偏差**。
+/// 实际场景：网络抖动导致播放缓冲区将音频强制拉长（WSOLA 变慢）或压缩（变快）。
 ///
-/// 基准选择的关键决策：基准必须对"循环停顿不固定"天然鲁棒。
-/// - 早期实现用 `ref_duration`（参考时长）做基准，隐含"无缝紧挨循环"假设，
-///   一旦实际录制里段间有停顿，每对相邻段都被算成正漂移（正常音频也被误报）。
-/// - 现在改用**录制段间间距的中位数**做基准：正常循环的段间间距彼此接近，
-///   中位数就是最稳定的代表值；只有**偏离中位数**的段才算漂移。
-///   这样无论循环停顿是 0ms 还是 500ms，只要各段停顿一致，就不报漂移。
+/// 检测原理：直接比较参考音频时长 vs 录制对应段的实际时长。
+/// - 正漂移（drift_ms > 0）：录制段比参考长，表示被拉长/变慢
+/// - 负漂移（drift_ms < 0）：录制段比参考短，表示被压缩/变快
 ///
-/// 段数门槛：段数 < 4 时直接跳过——中位数在小样本下不稳定，且此时
-/// "间距不一致"本就难以可靠判定（3 段只有 2 个间距，无法形成基准）。
+/// 阈值：双重条件同时满足才判定为漂移
+/// - 绝对偏差 > abs_ms（如 100ms）
+/// - 相对偏差 > ratio（如 5%）
 ///
 /// # Arguments
-/// * `alignment_offsets` - 各段在录制音频中的起始偏移（秒），已按时间排序
-/// * `threshold` - 双重阈值（绝对 ms + 比例），同时满足才算漂移
+/// * `seg_durations_s` - 各段录制音频的实际时长（秒）
+/// * `ref_duration_s` - 参考音频的时长（秒）
+/// * `threshold` - 双重阈值
 pub fn detect_warpings(
-    alignment_offsets: &[f64],
+    seg_durations_s: &[f64],
+    ref_duration_s: f64,
     threshold: WarpingThreshold,
 ) -> Vec<WarpingEvent> {
-    // 段数 < 4 时无可靠基准（中位数在小样本下不稳定），直接跳过。
-    if alignment_offsets.len() < 4 {
+    if seg_durations_s.is_empty() || ref_duration_s <= 0.0 {
         return vec![];
     }
 
-    // 计算相邻段间距
-    let mut gaps: Vec<f64> = Vec::with_capacity(alignment_offsets.len() - 1);
-    for i in 0..alignment_offsets.len() - 1 {
-        gaps.push(alignment_offsets[i + 1] - alignment_offsets[i]);
-    }
-    if gaps.is_empty() {
-        return vec![];
-    }
-
-    // 基准 = 段间间距的中位数（对"循环停顿不固定"鲁棒）
-    let base_gap = median(&mut gaps);
-    if base_gap <= 0.0 {
-        return vec![];
-    }
-
+    let ref_ms = ref_duration_s * 1000.0;
     let mut events = Vec::new();
-    for (i, &deg_gap) in gaps.iter().enumerate() {
-        let drift = deg_gap - base_gap;
-        let drift_ms = drift * 1000.0;
-        let drift_ratio = drift / base_gap;
+
+    for (seg_idx, &deg_dur_s) in seg_durations_s.iter().enumerate() {
+        let deg_ms = deg_dur_s * 1000.0;
+        let drift_ms = deg_ms - ref_ms;
+        let drift_ratio = drift_ms / ref_ms;
 
         // 双重阈值：绝对 ms 和比例同时超过才判定为漂移
         if drift_ms.abs() > threshold.abs_ms && drift_ratio.abs() > threshold.ratio {
             events.push(WarpingEvent {
-                segment_before: i,
-                segment_after: i + 1,
-                ref_gap_ms: base_gap * 1000.0,
-                deg_gap_ms: deg_gap * 1000.0,
+                segment_index: seg_idx,
+                ref_duration_ms: ref_ms,
+                deg_duration_ms: deg_ms,
                 drift_ms,
                 drift_ratio,
             });
@@ -454,21 +438,6 @@ pub fn detect_warpings(
 
     events
 }
-
-/// 计算中位数（输入会被排序）
-fn median(values: &mut [f64]) -> f64 {
-    if values.is_empty() {
-        return 0.0;
-    }
-    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
-        (values[mid - 1] + values[mid]) / 2.0
-    } else {
-        values[mid]
-    }
-}
-
 // ============================================================
 // 维度二补充：内容截断/裁剪检测 (Truncation)
 // ============================================================
@@ -632,8 +601,9 @@ pub fn detect_anomalies(
     let dropouts = detect_dropouts(reference, degraded, sample_rate, &config.dropout_config, 0);
     let dropout_duration_ms: f64 = dropouts.iter().map(|e| e.duration_ms).sum();
 
-    // 维度二：时轴漂移（中位数基准，段数<4 自动跳过）
-    let warpings = detect_warpings(alignment_offsets_s, config.warping_threshold);
+    // 维度二：时轴漂移（段时长偏差）
+    let ref_dur_s = _ref_duration;
+    let warpings = detect_warpings(alignment_offsets_s, ref_dur_s, config.warping_threshold);
     let warping_duration_ms: f64 = warpings.iter().map(|w| w.drift_ms.abs()).sum();
 
     // 维度三：频谱损伤
