@@ -83,6 +83,8 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
   .chart-full {{ position:relative; height:280px; }}
   .chart-row {{ display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }}
   @media(max-width:900px){{ .chart-row {{ grid-template-columns:1fr; }} }}
+  .chart-row {{ display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }}
+  @media(max-width:900px){{ .chart-row {{ grid-template-columns:1fr; }} }}
   @media(max-width:768px){{}}
   table{{width:100%;border-collapse:collapse;font-size:13px}}
   th,td{{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}}
@@ -243,6 +245,29 @@ if(patchData.length > 0 && patchData[0].length > 0){{
     options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}}}}}}
   }});
 }}
+
+// X轴优化：当标签过多时自动跳显
+(function() {{
+  var charts = ['chartMos', 'chartVnsim', 'chartFvnsim', 'chartEnergy', 'chartPatch'];
+  charts.forEach(function(id) {{
+    var canvas = document.getElementById(id);
+    if (!canvas) return;
+    var chart = Chart.getChart(canvas);
+    if (!chart || !chart.options.scales || !chart.options.scales.x) return;
+    var labels = chart.data.labels;
+    if (labels && labels.length > 20) {{
+      var step = Math.ceil(labels.length / 20);
+      chart.options.scales.x.ticks = {{
+        autoSkip: true,
+        maxRotation: 0,
+        callback: function(val, index) {{
+          return index % step === 0 ? labels[index] : '';
+        }}
+      }};
+      chart.update('none');
+    }}
+  }});
+}})();
 </script>
 </body>
 </html>"#,
