@@ -511,7 +511,7 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
             if warping_ms > 0.0 {
                 parts.push(format!("漂移{:.0}ms", warping_ms));
             }
-            if spectral > 0.1 {
+            if spectral > 0.25 {
                 parts.push(format!("损伤{:.0}%", spectral * 100.0));
             }
             parts.join(", ")

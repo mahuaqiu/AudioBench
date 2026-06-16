@@ -412,7 +412,9 @@ pub fn find_all_alignments_hybrid(
     // 去重 + 排序
     final_results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
 
-    let min_gap = ref_len / 2;
+    // 最小峰间距：参考长度的 80%（与 alignment.rs 一致），
+    // 避免同一次出现的旁瓣/自相关次峰被误判为第二次出现。
+    let min_gap = (ref_len as f64 * 0.8) as usize;
     let mut deduped = Vec::new();
     for r in final_results {
         let too_close = deduped.iter().any(|existing: &AlignmentResult| {

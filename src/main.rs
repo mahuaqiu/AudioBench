@@ -80,7 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &ref_audio.samples,
         &rec_audio.samples,
         ref_audio.sample_rate,
-        0.2,  // 置信度阈值（可适当降低）
+        0.4,  // 置信度阈值：单次出现不该有第二个 >0.4 的峰；循环播放的相邻出现相关性也应 >0.4
     );
     
     let num_segments = alignment_peaks.len();
@@ -206,25 +206,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 维度二：时轴漂移检测（在所有分段完成后）
-    let warping_threshold = 0.1; // 10% 偏差阈值
-    let warping_events = metrics::detect_warpings(
-        &alignment_offsets,
-        &ref_segment_gaps,
-        warping_threshold,
-    );
+    // 仅适用于循环播放（参考音频在录制中出现多次）场景。
+    // 单段（单次播放）无"段间"概念，直接跳过，不报漂移。
+    let warping_events = if num_segments >= 2 {
+        let warping_threshold = metrics::WarpingThreshold::default();
+        metrics::detect_warpings(
+            &alignment_offsets,
+            &ref_segment_gaps,
+            warping_threshold,
+        )
+    } else {
+        vec![]
+    };
 
     // 维度三：频谱损伤检测
-    let artifact_threshold = 0.3; // 相似度低于 0.3 判定为损伤
+    let artifact_threshold = 0.4; // 相似度低于 0.4 判定为损伤（与 AnomalyDetectConfig 一致）
     let (_spectral_score, spectral_events) = metrics::detect_spectral_artifacts(
         &all_patch_sims,
         artifact_threshold,
+        true, // 排除每段首尾 patch（边界效应：补零/能量过渡天然偏低）
     );
 
     // 将时轴漂移和频谱损伤结果更新到每段报告中
     for (seg_idx, seg_result) in segment_results.iter_mut().enumerate() {
-        // 合并时轴漂移事件���对应段
+        // 合并时轴漂移事件到对应段。
+        // 注意：每个 warping 事件只归 segment_before（前一段），避免与 segment_after 重复，
+        // 从而避免 report.rs/html_report.rs 的跨段累加把 drift_ms 翻倍。
         let seg_warpings: Vec<metrics::WarpingEvent> = warping_events.iter()
-            .filter(|w| w.segment_before == seg_idx || w.segment_after == seg_idx)
+            .filter(|w| w.segment_before == seg_idx)
             .cloned()
             .collect();
         let seg_warping_ms: f64 = seg_warpings.iter().map(|w| w.drift_ms.abs()).sum();
@@ -234,21 +243,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .filter(|a| a.segment_index == seg_idx)
             .cloned()
             .collect();
-        
-        // 计算该段的频谱损伤比例
-        let seg_patch_count = all_patch_sims.get(seg_idx).map(|p| p.len()).unwrap_or(0);
+
+        // 计算该段的频谱损伤比例（分母排除首尾 patch，与 detect_spectral_artifacts 一致）
+        let seg_total_patch = all_patch_sims.get(seg_idx).map(|p| p.len()).unwrap_or(0);
+        let seg_valid_patch = if seg_total_patch >= 4 { seg_total_patch - 2 } else { seg_total_patch };
         let seg_low_count = seg_artifacts.len();
-        let seg_spectral_score = if seg_patch_count > 0 {
-            seg_low_count as f64 / seg_patch_count as f64
+        let seg_spectral_score = if seg_valid_patch > 0 {
+            seg_low_count as f64 / seg_valid_patch as f64
         } else {
             0.0
         };
 
         // 更新异常检测报告
-        let has_anomaly = seg_result.anomaly.has_anomaly 
-            || !seg_warpings.is_empty() 
-            || seg_spectral_score > 0.1;
-        
+        // has_anomaly 的频谱门槛从 0.1 提到 0.25，避免少量低相似度 patch 就误标异常
+        let has_anomaly = seg_result.anomaly.has_anomaly
+            || !seg_warpings.is_empty()
+            || seg_spectral_score > 0.25;
+
         seg_result.anomaly.warpings = seg_warpings;
         seg_result.anomaly.warping_duration_ms = seg_warping_ms;
         seg_result.anomaly.spectral_artifacts_score = seg_spectral_score;

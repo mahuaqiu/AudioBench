@@ -184,7 +184,7 @@ pub fn print_console_report(report: &EvaluationReport) {
                 println!("    时轴漂移: {:.0}ms ({}次)", 
                          seg.anomaly.warping_duration_ms, seg.anomaly.warpings.len());
             }
-            if seg.anomaly.spectral_artifacts_score > 0.1 {
+            if seg.anomaly.spectral_artifacts_score > 0.25 {
                 println!("    频谱损伤: {:.1}%", 
                          seg.anomaly.spectral_artifacts_score * 100.0);
             }

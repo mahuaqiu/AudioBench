@@ -135,24 +135,30 @@ pub fn compute_level_stats(samples: &[f64]) -> LevelResult {
 pub struct DropoutDetectorConfig {
     /// 静音阈值（RMS 低于此值判定为静音）
     pub silence_threshold: f64,
-    /// 最短中断持续时间 (ms)，低于此不判定为中断
+    /// 最短中断持续时间 (ms)，低于此不判定为中断。
+    /// 语义：参考信号在该时间段有声，但录制信号静音超过此时长才算中断。
     pub min_duration_ms: f64,
-    /// 相对于参考信号的能量衰减比阈值
+    /// 相对于参考信号的能量衰减比阈值（deg_rms / ref_rms < 此值判定为衰减）
     pub attenuation_threshold: f64,
     /// 分帧大小（采样点数）
     pub frame_size: usize,
     /// 帧移（采样点数）
     pub hop_size: usize,
+    /// 帧级对齐搜索窗口（采样点数）。
+    /// 每帧 RMS 比较前，先在录制端 ±此窗口范围内做局部互相关，
+    /// 让参考帧对齐到录制帧，消除裁剪/边界错位导致的误判。
+    pub frame_align_search_samples: usize,
 }
 
 impl Default for DropoutDetectorConfig {
     fn default() -> Self {
         Self {
             silence_threshold: 0.005,
-            min_duration_ms: 20.0,
+            min_duration_ms: 60.0,
             attenuation_threshold: 0.05,
             frame_size: 320,
             hop_size: 160,
+            frame_align_search_samples: 3200, // 200ms @ 16kHz，按采样率重算
         }
     }
 }
@@ -161,12 +167,17 @@ impl Default for DropoutDetectorConfig {
 impl DropoutDetectorConfig {
     pub fn for_sample_rate(sample_rate: u32) -> Self {
         let frame_samples = (sample_rate as f64 * 0.020) as usize; // 20ms 帧长
+        // min_duration_ms：语音模式(16kHz) 60ms，音频模式(48kHz) 120ms
+        let min_duration_ms = if sample_rate <= 16000 { 60.0 } else { 120.0 };
+        // 帧级对齐搜索窗口 ±200ms
+        let frame_align_search_samples = (sample_rate as f64 * 0.200) as usize;
         Self {
             silence_threshold: 0.005,
-            min_duration_ms: 20.0,
+            min_duration_ms,
             attenuation_threshold: 0.05,
             frame_size: frame_samples,
             hop_size: frame_samples / 2,
+            frame_align_search_samples,
         }
     }
 }
@@ -175,6 +186,49 @@ impl DropoutDetectorConfig {
 fn compute_rms(samples: &[f64]) -> f64 {
     if samples.is_empty() { return 0.0; }
     (samples.iter().map(|x| x * x).sum::<f64>() / samples.len() as f64).sqrt()
+}
+
+/// 在录制信号指定位置附近的小窗口内，做局部归一化互相关，
+/// 找到参考帧在录制端的最佳对齐偏移（采样点数）。
+///
+/// 返回相对于 `deg_center` 的相对偏移（可为负，调用方自行 clamp）。
+/// 这样可以让参考帧与录制帧在 RMS 比较前先对齐到帧级，
+/// 消除裁剪/边界错位导致的"参考有声、录制恰好落在过渡区"误判。
+fn local_frame_align_offset(
+    ref_frame: &[f64],
+    degraded: &[f64],
+    deg_center: usize,
+    search_radius: usize,
+) -> isize {
+    let frame_len = ref_frame.len();
+    if frame_len == 0 || degraded.len() < frame_len {
+        return 0;
+    }
+    let ref_energy: f64 = ref_frame.iter().map(|x| x * x).sum();
+
+    let lo = deg_center.saturating_sub(search_radius);
+    let hi = (deg_center + search_radius).min(degraded.len().saturating_sub(frame_len));
+    if hi <= lo || ref_energy < 1e-12 {
+        return 0;
+    }
+
+    let mut best_offset: isize = 0;
+    let mut best_conf: f64 = 0.0;
+    for k in lo..=hi {
+        let seg = &degraded[k..k + frame_len];
+        let seg_energy: f64 = seg.iter().map(|x| x * x).sum();
+        let denom = (ref_energy * seg_energy).sqrt();
+        if denom < 1e-12 {
+            continue;
+        }
+        let sum: f64 = ref_frame.iter().zip(seg.iter()).map(|(r, &d)| r * d).sum();
+        let conf = (sum / denom).abs().min(1.0);
+        if conf > best_conf {
+            best_conf = conf;
+            best_offset = k as isize - deg_center as isize;
+        }
+    }
+    best_offset
 }
 
 /// 维度一：时域中断检测
@@ -209,11 +263,26 @@ pub fn detect_dropouts(
     let mut frame_idx = 0;
     while frame_idx + frame_size <= max_valid_idx {
         let ref_frame = &reference[frame_idx..frame_idx + frame_size];
-        let deg_frame = &degraded[frame_idx..frame_idx + frame_size];
-        
+
+        // 帧级对齐：在录制端 ±frame_align_search_samples/4 范围内找最佳偏移，
+        // 让参考帧对齐到录制帧，消除裁剪/边界错位导致的误判。
+        // 搜索半径取配置窗口的 1/4（即 ±50ms @ 默认 200ms 配置），避免对齐到无关内容。
+        let align_radius = (config.frame_align_search_samples / 4).max(1);
+        let deg_center = frame_idx.min(degraded.len().saturating_sub(frame_size));
+        let rel_offset = local_frame_align_offset(ref_frame, degraded, deg_center, align_radius);
+        let aligned_deg_start = (deg_center as isize + rel_offset) as usize;
+        // 取对齐后的录制帧（保证不越界）
+        let deg_frame = if aligned_deg_start + frame_size <= degraded.len() {
+            &degraded[aligned_deg_start..aligned_deg_start + frame_size]
+        } else {
+            &degraded[frame_idx..frame_idx + frame_size]
+        };
+
         let ref_rms = compute_rms(ref_frame);
         let deg_rms = compute_rms(deg_frame);
-        
+
+        // 语义：必须参考信号在该帧有声，且录制信号静音/能量严重衰减才算中断。
+        // 参考本身静音（如正常停顿）不报中断。
         let ref_has_sound = ref_rms > config.silence_threshold * 2.0;
         let deg_silent = deg_rms < config.silence_threshold;
         let energy_attenuation = if ref_rms > 0.0 {
@@ -221,7 +290,7 @@ pub fn detect_dropouts(
         } else {
             false
         };
-        
+
         let is_dropout = ref_has_sound && (deg_silent || energy_attenuation);
         
         if is_dropout {
@@ -286,43 +355,66 @@ pub fn detect_dropouts(
 // 维度二：时轴漂移检测 (Time Warping)
 // ============================================================
 
+/// 时轴漂移双重阈值（绝对 ms + 比例），同时满足才算漂移
+#[derive(Debug, Clone, Copy)]
+pub struct WarpingThreshold {
+    /// 绝对漂移阈值（ms）：drift_ms 超过此值才可能是漂移
+    pub abs_ms: f64,
+    /// 比例漂移阈值：drift_ratio 超过此值才可能是漂移
+    pub ratio: f64,
+}
+
+impl Default for WarpingThreshold {
+    fn default() -> Self {
+        Self {
+            abs_ms: 200.0,  // 段间错位超过 200ms 才考虑
+            ratio: 0.03,    // 且相对参考时长偏差超过 3%
+        }
+    }
+}
+
 /// 维度二：时轴漂移检测
-/// 
+///
+/// 仅适用于循环播放（参考音频在录制中出现多次）场景：比较相邻两次出现
+/// 的段间间距是否与参考时长一致。单次播放场景调用方应跳过此函数。
+///
 /// # Arguments
-/// *  - 各段在录制音频中的起始偏移（秒）
-/// *  - 各段之间的参考音频间距（秒），长度为段数-1
-/// *  - 漂移比例阈值，超过此值判定为漂移
+/// * `alignment_offsets` - 各段在录制音频中的起始偏移（秒）
+/// * `ref_gaps` - 各段之间的参考音频间距（秒），长度为段数-1
+/// * `threshold` - 双重阈值（绝对 ms + 比例），同时满足才算漂移
 pub fn detect_warpings(
     alignment_offsets: &[f64],
     ref_gaps: &[f64],
-    warping_threshold: f64,
+    threshold: WarpingThreshold,
 ) -> Vec<WarpingEvent> {
     if alignment_offsets.len() < 2 {
         return vec![];
     }
-    
+
     let mut events = Vec::new();
-    
+
     for i in 0..alignment_offsets.len() - 1 {
         let deg_gap = alignment_offsets[i + 1] - alignment_offsets[i];
         // 使用实际的参考段间距，而非假设恒等于 ref_duration
         let ref_gap = ref_gaps.get(i).copied().unwrap_or(0.0);
-        
+
         let drift = deg_gap - ref_gap;
+        let drift_ms = drift * 1000.0;
         let drift_ratio = if ref_gap > 0.0 { drift / ref_gap } else { 0.0 };
-        
-        if drift_ratio.abs() > warping_threshold {
+
+        // 双重阈值：绝对 ms 和比例同时超过才判定为漂移
+        if drift_ms.abs() > threshold.abs_ms && drift_ratio.abs() > threshold.ratio {
             events.push(WarpingEvent {
                 segment_before: i,
                 segment_after: i + 1,
                 ref_gap_ms: ref_gap * 1000.0,
                 deg_gap_ms: deg_gap * 1000.0,
-                drift_ms: drift * 1000.0,
+                drift_ms,
                 drift_ratio,
             });
         }
     }
-    
+
     events
 }
 
@@ -331,20 +423,37 @@ pub fn detect_warpings(
 // ============================================================
 
 /// 维度三：频谱损伤检测
+///
+/// # Arguments
+/// * `patch_sims` - 各段的 patch 相似度列表
+/// * `artifact_threshold` - 相似度低于此值判为损伤 patch
+/// * `exclude_edge_patches` - 是否排除每段的首尾 patch（边界效应：补零/能量过渡）
 pub fn detect_spectral_artifacts(
     patch_sims: &[Vec<crate::visqol::PatchSimilarityResult>],
     artifact_threshold: f64,
+    exclude_edge_patches: bool,
 ) -> (f64, Vec<SpectralArtifactEvent>) {
     if patch_sims.is_empty() {
         return (0.0, vec![]);
     }
-    
+
     let mut all_artifacts = Vec::new();
     let mut total_low_count = 0usize;
     let mut total_patch_count = 0usize;
-    
+
     for (seg_idx, patches) in patch_sims.iter().enumerate() {
-        for (patch_idx, patch) in patches.iter().enumerate() {
+        if patches.is_empty() {
+            continue;
+        }
+        // 排除首尾 patch（边界效应）：只有 patch 数 >= 4 才有意义排除
+        let (start, end) = if exclude_edge_patches && patches.len() >= 4 {
+            (1usize, patches.len() - 1)
+        } else {
+            (0usize, patches.len())
+        };
+
+        for patch_idx in start..end {
+            let patch = &patches[patch_idx];
             total_patch_count += 1;
             if patch.similarity < artifact_threshold {
                 total_low_count += 1;
@@ -358,13 +467,13 @@ pub fn detect_spectral_artifacts(
             }
         }
     }
-    
+
     let score = if total_patch_count > 0 {
         total_low_count as f64 / total_patch_count as f64
     } else {
         0.0
     };
-    
+
     (score, all_artifacts)
 }
 
@@ -376,7 +485,7 @@ pub fn detect_spectral_artifacts(
 #[allow(dead_code)]
 pub struct AnomalyDetectConfig {
     pub dropout_config: DropoutDetectorConfig,
-    pub warping_threshold: f64,
+    pub warping_threshold: WarpingThreshold,
     pub artifact_threshold: f64,
 }
 
@@ -384,7 +493,7 @@ impl Default for AnomalyDetectConfig {
     fn default() -> Self {
         Self {
             dropout_config: DropoutDetectorConfig::default(),
-            warping_threshold: 0.1,
+            warping_threshold: WarpingThreshold::default(),
             artifact_threshold: 0.4,
         }
     }
@@ -404,7 +513,7 @@ pub fn detect_anomalies(
     // 维度一：时域中断
     let dropouts = detect_dropouts(reference, degraded, sample_rate, &config.dropout_config, 0);
     let dropout_duration_ms: f64 = dropouts.iter().map(|e| e.duration_ms).sum();
-    
+
     // 维度二：时轴漂移
     // 时轴漂移检测：构建与 alignment_offsets 对应的参考段间距
     let ref_gaps: Vec<f64> = std::iter::repeat(ref_duration)
@@ -412,12 +521,14 @@ pub fn detect_anomalies(
         .collect();
     let warpings = detect_warpings(alignment_offsets_s, &ref_gaps, config.warping_threshold);
     let warping_duration_ms: f64 = warpings.iter().map(|w| w.drift_ms.abs()).sum();
-    
+
     // 维度三：频谱损伤
-    let (spectral_artifacts_score, spectral_artifacts) = detect_spectral_artifacts(patch_sims, config.artifact_threshold);
-    
-    let has_anomaly = !dropouts.is_empty() || !warpings.is_empty() || spectral_artifacts_score > 0.1;
-    
+    let (spectral_artifacts_score, spectral_artifacts) =
+        detect_spectral_artifacts(patch_sims, config.artifact_threshold, true);
+
+    let has_anomaly =
+        !dropouts.is_empty() || !warpings.is_empty() || spectral_artifacts_score > 0.25;
+
     AudioAnomalyReport {
         has_anomaly,
         dropouts,
