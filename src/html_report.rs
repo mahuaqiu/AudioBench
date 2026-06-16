@@ -81,6 +81,8 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
   .section {{ background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:24px; }}
   .section-title {{ font-size:16px; font-weight:600; margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--border); }}
   .chart-full {{ position:relative; height:280px; }}
+  .chart-row {{ display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-bottom:24px; }}
+  @media(max-width:900px){{ .chart-row {{ grid-template-columns:1fr; }} }}
   @media(max-width:768px){{}}
   table{{width:100%;border-collapse:collapse;font-size:13px}}
   th,td{{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}}
@@ -109,7 +111,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div><span class="label">采样率：</span><span class="value">{sample_rate}Hz（{mode}）</span></div>
 <div><span class="label">对齐延迟：</span><span class="value">{delay_ms:.1}ms</span></div>
 <div><span class="label">对齐置信度：</span><span class="value">{conf:.1}%</span></div>
-<div><span class="label">分��数量：</span><span class="value">{seg_count}</span></div>
+<div><span class="label">分段数量：</span><span class="value">{seg_count}</span></div>
 </div>
 </div>
 
@@ -131,30 +133,32 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 </div>
 
-<div class="section"><div class="section-title">MOS-LQO 分段趋势</div>
-<div class="chart-full"><canvas id="chartMos"></canvas></div>
-</div>
-
-<div class="section"><div class="section-title">VNSIM 分段趋势</div>
-<div class="chart-full"><canvas id="chartVnsim"></canvas></div>
-</div>
-
-<div class="section"><div class="section-title">fVNSIM 频段相似度（多段对比）</div>
-<div class="chart-full"><canvas id="chartFvnsim"></canvas></div>
-</div>
-
-<div class="section"><div class="section-title">频段能量比 fvdegenergy（多段对比）</div>
-<div class="chart-full"><canvas id="chartEnergy"></canvas></div>
-</div>
-
-<div class="section"><div class="section-title">Patch 时间片段相似度</div>
-<div class="chart-full"><canvas id="chartPatch"></canvas></div>
-</div>
-
 <div class="section"><div class="section-title">各段详细评分</div>
 <table><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>卡顿</th></tr></thead>
 <tbody>{table_rows}</tbody>
 </table>
+</div>
+
+<div class="section"><div class="section-title">MOS-LQO 分段趋势</div>
+<div class="chart-full"><canvas id="chartMos"></canvas></div>
+</div>
+
+<div class="chart-row">
+<div class="section" style="margin-bottom:0"><div class="section-title">VNSIM 分段趋势</div>
+<div class="chart-full"><canvas id="chartVnsim"></canvas></div>
+</div>
+<div class="section" style="margin-bottom:0"><div class="section-title">Patch 时间片段相似度</div>
+<div class="chart-full"><canvas id="chartPatch"></canvas></div>
+</div>
+</div>
+
+<div class="chart-row">
+<div class="section" style="margin-bottom:0"><div class="section-title">fVNSIM 频段相似度（多段对比）</div>
+<div class="chart-full"><canvas id="chartFvnsim"></canvas></div>
+</div>
+<div class="section" style="margin-bottom:0"><div class="section-title">频段能量比（多段对比）</div>
+<div class="chart-full"><canvas id="chartEnergy"></canvas></div>
+</div>
 </div>
 
 <div class="section"><div class="section-title">指标说明</div>
