@@ -417,6 +417,9 @@ pub fn detect_warpings(
     }
 
     let ref_ms = ref_duration_s * 1000.0;
+    // [DIAG] 漂移检测内部基准（核对与 main.rs DIAG 是否一致）
+    eprintln!("[DIAG] detect_warpings 内部: ref_duration_s={:.6}s → ref_ms={:.1}ms, 输入段数={}, 阈值 abs>{}ms && ratio>{}",
+              ref_duration_s, ref_ms, seg_durations_s.len(), threshold.abs_ms, threshold.ratio);
     let mut events = Vec::new();
 
     for (seg_idx, &deg_dur_s) in seg_durations_s.iter().enumerate() {
@@ -483,6 +486,9 @@ pub fn detect_truncation(
         return vec![];
     }
     let ref_ms = ref_samples as f64 / sample_rate as f64 * 1000.0;
+    // [DIAG] 截断检测内部基准（核对与 main.rs DIAG 是否一致）
+    eprintln!("[DIAG] detect_truncation 内部: ref_samples={} → ref_ms={:.1}ms, 输入段数={}, 阈值 trunc>={}ms",
+              ref_samples, ref_ms, seg_actual_samples.len(), threshold.min_truncation_ms);
 
     let mut events = Vec::new();
     for (seg_idx, &actual) in seg_actual_samples.iter().enumerate() {

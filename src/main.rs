@@ -140,6 +140,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("[*] 分段数量: {}", num_segments);
 
+    // [DIAG] 全局长度诊断：参考/录制的全长 vs 去尾静音有效长度
+    // 用于排查截断/漂移基准口径错位（根因 A）
+    {
+        let ref_full = ref_audio.samples.len();
+        let ref_eff = find_actual_audio_end(&ref_audio.samples, ref_audio.sample_rate);
+        let rec_full = rec_audio.samples.len();
+        let rec_eff = find_actual_audio_end(&rec_audio.samples, ref_audio.sample_rate);
+        let sr = ref_audio.sample_rate as f64;
+        println!("[DIAG] 全局长度: 参考 全长={}/ {:.3}s, 去尾有效={}/ {:.3}s (尾部静音 {:.0}ms)",
+                 ref_full, ref_full as f64 / sr, ref_eff, ref_eff as f64 / sr,
+                 (ref_full - ref_eff) as f64 / sr * 1000.0);
+        println!("[DIAG] 全局长度: 录制 全长={}/ {:.3}s, 去尾有效={}/ {:.3}s (尾部静音 {:.0}ms)",
+                 rec_full, rec_full as f64 / sr, rec_eff, rec_eff as f64 / sr,
+                 (rec_full - rec_eff) as f64 / sr * 1000.0);
+        println!("[DIAG] 全局长度差: 录制-参考 = {:+.0}ms (全长口径), {:+.0}ms (去尾有效口径)",
+                 (rec_full as f64 - ref_full as f64) / sr * 1000.0,
+                 (rec_eff as f64 - ref_eff as f64) / sr * 1000.0);
+    }
+
     let mut segment_results = Vec::with_capacity(num_segments);
 
     // 用于收集异常检测的数据
@@ -168,6 +187,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
        // 实际音频时长（秒），用于漂移检测
        let seg_actual_dur_s = seg_actual_end as f64 / ref_audio.sample_rate as f64;
        seg_durations_s.push(seg_actual_dur_s);
+
+       // [DIAG] 每段提取诊断：边界 + 有效长度
+       // - seg_raw_samples: resize 补零前原始段长（可能 < ref_len，说明录制在段尾被截断）
+       // - seg_actual_end: resize 后再 find_actual_audio_end，定位「补零区起点」
+       {
+           let sr = ref_audio.sample_rate as f64;
+           let ref_len = ref_audio.samples.len();
+           let raw = _seg_raw_samples;
+           println!("[DIAG] 第{}段 边界: seg_start={}, seg_end={}, 段原始长度={} (参考长度={}, 录制末尾剩余可取={})",
+                    seg_idx + 1, seg_start, seg_end, raw, ref_len,
+                    rec_audio.samples.len().saturating_sub(seg_start));
+           println!("[DIAG] 第{}段 长度: 段原始={:.3}s, 补零后有效={:.3}s (尾部 {:.0}ms 被判为静音/补零), 参考={:.3}s",
+                    seg_idx + 1, raw as f64 / sr, seg_actual_end as f64 / sr,
+                    (ref_len - seg_actual_end) as f64 / sr * 1000.0, ref_len as f64 / sr);
+           println!("[DIAG] 第{}段 口径差: 段原始-参考={:+.0}ms, 段有效-参考={:+.0}ms (截断/漂移实际将用后者)",
+                    seg_idx + 1,
+                    (raw as f64 - ref_len as f64) / sr * 1000.0,
+                    (seg_actual_end as f64 - ref_len as f64) / sr * 1000.0);
+       }
 
         // 调试：打印分段提取的详细信息
         let seg_samples = &rec_audio.samples[seg_start..seg_end];
@@ -222,6 +260,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &metrics::DropoutDetectorConfig::for_sample_rate(ref_audio.sample_rate),
             seg_actual_len, // 有效长度，排除补零尾段
         );
+
+        // [DIAG] 中断检测诊断：检测器输入范围 + 每个事件详情
+        {
+            let sr = ref_audio.sample_rate as f64;
+            let cfg = metrics::DropoutDetectorConfig::for_sample_rate(ref_audio.sample_rate);
+            println!("[DIAG] 第{}段 中断检测: 参考长={}, seg_degraded长={}, valid_len={} ({:.3}s), 最短中断阈值={:.0}ms, 静音阈值={}, 衰减阈值={}",
+                     seg_idx + 1, ref_audio.samples.len(), seg_degraded.len(),
+                     seg_actual_len, seg_actual_len as f64 / sr,
+                     cfg.min_duration_ms, cfg.silence_threshold, cfg.attenuation_threshold);
+            println!("[DIAG] 第{}段 中断事件数={}", seg_idx + 1, dropout_events.len());
+            for (i, ev) in dropout_events.iter().enumerate() {
+                println!("[DIAG]    中断#{}: {:.3}-{:.3}s 持续{:.0}ms, ref_rms={:.5}, deg_rms={:.5}, 衰减比={:.4}",
+                         i + 1, ev.start_time_s, ev.end_time_s, ev.duration_ms,
+                         ev.ref_rms, ev.deg_rms, ev.attenuation_ratio);
+            }
+        }
+
         let dropout_duration_ms: f64 = dropout_events.iter().map(|e| e.duration_ms).sum();
         let anomaly = metrics::AudioAnomalyReport {
             has_anomaly: !dropout_events.is_empty(),
@@ -263,6 +318,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics::WarpingThreshold::default(),
     );
 
+    // [DIAG] 全局漂移检测诊断：所有段时长 + 阈值
+    {
+        let ref_ms = ref_duration * 1000.0;
+        let thr = metrics::WarpingThreshold::default();
+        println!("[DIAG] === 漂移检测汇总 === 基准 ref_duration={:.3}s ({:.0}ms), 阈值 abs>{}ms && ratio>{}",
+                 ref_duration, ref_ms, thr.abs_ms, thr.ratio);
+        for (i, &dur) in seg_durations_s.iter().enumerate() {
+            let drift_ms = dur * 1000.0 - ref_ms;
+            let drift_ratio = drift_ms / ref_ms;
+            let triggers = drift_ms.abs() > thr.abs_ms && drift_ratio.abs() > thr.ratio;
+            println!("[DIAG]    第{}段: seg_dur={:.3}s, drift={:+.1}ms ({:+.3}%) {}",
+                     i + 1, dur, drift_ms, drift_ratio * 100.0,
+                     if triggers { "→ 触发漂移" } else { "→ 未触发" });
+        }
+    }
+
     // 维度二补充：内容截断/裁剪检测
     // 直接比对各段实际长度 vs 参考长度，绕过中断/频谱检测对裁剪的盲区。
     let truncation_events = metrics::detect_truncation(
@@ -272,6 +343,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         metrics::TruncationThreshold::default(),
     );
 
+    // [DIAG] 全局截断检测诊断：所有段实际长度 + 阈值
+    {
+        let ref_ms = ref_audio.samples.len() as f64 / ref_audio.sample_rate as f64 * 1000.0;
+        let thr = metrics::TruncationThreshold::default();
+        println!("[DIAG] === 截断检测汇总 === 基准 ref_samples全长={} ({:.0}ms), 阈值 trunc>{}ms",
+                 ref_audio.samples.len(), ref_ms, thr.min_truncation_ms);
+        for (i, &actual) in seg_actual_samples.iter().enumerate() {
+            let deg_ms = actual as f64 / ref_audio.sample_rate as f64 * 1000.0;
+            let trunc_ms = ref_ms - deg_ms;
+            let triggers = trunc_ms >= thr.min_truncation_ms;
+            println!("[DIAG]    第{}段: seg_actual={}/ {:.3}s, trunc={:.1}ms {}",
+                     i + 1, actual, actual as f64 / ref_audio.sample_rate as f64,
+                     trunc_ms,
+                     if triggers { "→ 触发截断" } else { "→ 未触发" });
+        }
+    }
+
     // 维度三：频谱损伤检测
     let artifact_threshold = 0.4; // 相似度低于 0.4 判定为损伤（与 AnomalyDetectConfig 一致）
     let (_spectral_score, spectral_events) = metrics::detect_spectral_artifacts(
@@ -279,6 +367,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         artifact_threshold,
         true, // 排除每段首尾 patch（边界效应：补零/能量过渡天然偏低）
     );
+
+    // [DIAG] 全局频谱检测诊断：每段 patch 数量 + 低相似度分布
+    {
+        println!("[DIAG] === 频谱检测汇总 === 阈值 patch_sim<{}, 段内低相似度比例>{}% 才报异常",
+                 artifact_threshold, 0.25 * 100.0);
+        for (i, patches) in all_patch_sims.iter().enumerate() {
+            if patches.is_empty() {
+                println!("[DIAG]    第{}段: 无 patch", i + 1);
+                continue;
+            }
+            let (start, end) = if patches.len() >= 4 { (1, patches.len() - 1) } else { (0, patches.len()) };
+            let valid_count = end - start;
+            let valid_sims: Vec<f64> = patches[start..end].iter().map(|p| p.similarity).collect();
+            let low_count = valid_sims.iter().filter(|&&s| s < artifact_threshold).count();
+            let min_sim = valid_sims.iter().cloned().fold(f64::INFINITY, f64::min);
+            let score = if valid_count > 0 { low_count as f64 / valid_count as f64 } else { 0.0 };
+            println!("[DIAG]    第{}段: patch总数={}, 有效patch(排除首尾)={}, 低相似度(<{})={}/{}) 比例={:.1}% 最低={:.3}",
+                     i + 1, patches.len(), valid_count, artifact_threshold, low_count, valid_count,
+                     score * 100.0, min_sim);
+            if low_count > 0 {
+                let detail: Vec<String> = patches[start..end].iter().enumerate()
+                    .filter(|(_, p)| p.similarity < artifact_threshold)
+                    .map(|(k, p)| format!("patch{}={:.3}", start + k, p.similarity))
+                    .collect();
+                println!("[DIAG]       低相似度 patch: {}", detail.join(", "));
+            }
+        }
+    }
 
     // 将时轴漂移和频谱损伤结果更新到每段报告中
     for (seg_idx, seg_result) in segment_results.iter_mut().enumerate() {
