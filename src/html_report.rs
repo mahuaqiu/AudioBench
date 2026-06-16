@@ -226,19 +226,27 @@ var centerFreqBands = JSON.parse({center_freq_json});
 
 var segColors = ['#3182ce','#e53e3e','#38a169','#d69e2e','#805ad5','#dd6b20','#319795','#b83280'];
 
-// MOS-LQO 分段趋势
-new Chart(document.getElementById('chartMos'),{{
-  type:'line',
-  data:{{labels:segLabels,datasets:[{{label:'MOS-LQO',data:mosValues,borderColor:'#3182ce',backgroundColor:'rgba(49,130,206,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
-}});
+// MOS-LQO 分段趋势（单段不显示）
+if(segLabels.length > 1){{
+  new Chart(document.getElementById('chartMos'),{{
+    type:'line',
+    data:{{labels:segLabels,datasets:[{{label:'MOS-LQO',data:mosValues,borderColor:'#3182ce',backgroundColor:'rgba(49,130,206,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
+    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
+  }});
+}} else {{
+  document.getElementById('chartMos').parentElement.style.display = 'none';
+}}
 
-// VNSIM 分段趋势
-new Chart(document.getElementById('chartVnsim'),{{
-  type:'line',
-  data:{{labels:segLabels,datasets:[{{label:'VNSIM',data:vnsimValues,borderColor:'#38a169',backgroundColor:'rgba(56,161,105,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
-}});
+// VNSIM 分段趋势（单段不显示）
+if(segLabels.length > 1){{
+  new Chart(document.getElementById('chartVnsim'),{{
+    type:'line',
+    data:{{labels:segLabels,datasets:[{{label:'VNSIM',data:vnsimValues,borderColor:'#38a169',backgroundColor:'rgba(56,161,105,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
+    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
+  }});
+}} else {{
+  document.getElementById('chartVnsim').parentElement.style.display = 'none';
+}}
 
 // fVNSIM 频段相似度 - 动态生成bandLabels基于实际数据长度
 var bandLabels = fvnsimData.length > 0 && fvnsimData[0].length > 0 
@@ -255,11 +263,16 @@ function bandTooltipLabel(label, dataIndex) {{
 var fvnsimDatasets = fvnsimData.map(function(d,i){{
   return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],pointStyle:'circle',pointRadius:3,fill:false,tension:0.3}};
 }});
-new Chart(document.getElementById('chartFvnsim'),{{
-  type:'line',
-  data:{{labels:bandLabels,datasets:fvnsimDatasets}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}},legend:multiSegLegend(fvnsimData.length),tooltip:{{callbacks:{{title:function(items){{return bandTooltipLabel(items[0].label,items[0].dataIndex);}}}}}}}}}}
-}});
+// fVNSIM 频段相似度（多段对比，单段隐藏）
+if(fvnsimData.length > 1){{
+  new Chart(document.getElementById('chartFvnsim'),{{
+    type:'line',
+    data:{{labels:bandLabels,datasets:fvnsimDatasets}},
+    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}},legend:multiSegLegend(fvnsimData.length),tooltip:{{callbacks:{{title:function(items){{return bandTooltipLabel(items[0].label,items[0].dataIndex);}}}}}}}}}}
+  }});
+}} else {{
+  document.getElementById('chartFvnsim').parentElement.style.display = 'none';
+}}
 
 // 频段能量比 - 使用与fVNSIM相同的动态bandLabels
 var energyDatasets = energyData.map(function(d,i){{
@@ -268,11 +281,16 @@ var energyDatasets = energyData.map(function(d,i){{
 var energyBandLabels = energyData.length > 0 && energyData[0].length > 0
   ? Array.from({{length:energyData[0].length}},function(_,i){{return 'B'+(i+1);}})
   : bandLabels;
-new Chart(document.getElementById('chartEnergy'),{{
-  type:'line',
-  data:{{labels:energyBandLabels,datasets:energyDatasets}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}},legend:multiSegLegend(energyData.length),tooltip:{{callbacks:{{title:function(items){{return bandTooltipLabel(items[0].label,items[0].dataIndex);}}}}}}}}}}
-}});
+// 频段能量比（多段对比，单段隐藏）
+if(energyData.length > 1){{
+  new Chart(document.getElementById('chartEnergy'),{{
+    type:'line',
+    data:{{labels:energyBandLabels,datasets:energyDatasets}},
+    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}},legend:multiSegLegend(energyData.length),tooltip:{{callbacks:{{title:function(items){{return bandTooltipLabel(items[0].label,items[0].dataIndex);}}}}}}}}}}
+  }});
+}} else {{
+  document.getElementById('chartEnergy').parentElement.style.display = 'none';
+}}
 
 // Patch 时间片段相似度
 if(patchData.length > 0 && patchData[0].length > 0){{
@@ -285,6 +303,8 @@ if(patchData.length > 0 && patchData[0].length > 0){{
     data:{{labels:allPatchLabels,datasets:patchDatasets}},
     options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}},legend:multiSegLegend(patchData.length)}}}}
   }});
+}} else {{
+  document.getElementById('chartPatch').parentElement.style.display = 'none';
 }}
 
 // 多段图例配置：段数<=8正常显示，>8自动折叠

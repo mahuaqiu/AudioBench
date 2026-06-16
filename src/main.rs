@@ -40,6 +40,47 @@ struct Args {
     html: Option<PathBuf>,
 }
 
+// 查找实际音频末尾：找到最后一个能量明显非零的采样点
+// 返回实际有信号的样本数（不含末尾静音/补零）
+fn find_actual_audio_end(samples: &[f64], sample_rate: u32) -> usize {
+    if samples.is_empty() {
+        return 0;
+    }
+    
+    // 能量阈值：RMS 低于此值认为已结束
+    let energy_threshold = 0.001;
+    // 末尾静音判断：连续这么多采样点能量都低于阈值则认为音频结束
+    let silence_window = (sample_rate as f64 * 0.020) as usize; // 20ms
+    
+    let mut silent_count = 0;
+    let window_size = silence_window.max(1);
+    
+    // 从末尾向前遍历
+    for i in (0..samples.len()).rev() {
+        // 计算当前窗口的 RMS
+        let window_start = i.saturating_sub(window_size - 1);
+        let window = &samples[window_start..=i];
+        if window.is_empty() { break; }
+        
+        let rms = (window.iter().map(|&x| x * x).sum::<f64>() / window.len() as f64).sqrt();
+        
+        if rms < energy_threshold {
+            silent_count += 1;
+            if silent_count >= silence_window {
+                // 找到静音窗口，返回非静音部分的结尾
+                let actual_end = i + silent_count;
+                return actual_end.min(samples.len());
+            }
+        } else {
+            silent_count = 0;
+        }
+    }
+    
+    // 如果没有找到静音结尾，返回整个样本长度
+    samples.len()
+}
+
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -115,8 +156,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 收集对齐偏移（秒）
         alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
-        // 收集该段实际音频样本数（不含末尾补零），用于内容截断检测
-        seg_actual_samples.push(seg_end - seg_start);
+        // 查找该段实际音频末尾（能量从非零到接近零的转变点）
+        let seg_actual_end = find_actual_audio_end(
+            &rec_audio.samples[seg_start..seg_end.min(rec_audio.samples.len())],
+            ref_audio.sample_rate,
+        );
+        // 实际样本数 = 实际末尾位置 - 起始位置
+        seg_actual_samples.push(seg_actual_end);
         // 收集该段实际时长（秒），用于漂移检测
         let seg_actual_dur_s = (seg_end - seg_start) as f64 / ref_audio.sample_rate as f64;
         seg_durations_s.push(seg_actual_dur_s);

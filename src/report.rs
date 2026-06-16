@@ -136,9 +136,9 @@ pub fn print_console_report(report: &EvaluationReport) {
 
     // 异常统计汇总
     let n = report.segments.len();
-    let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms).sum();
-    let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms).sum();
-    let total_truncation: f64 = report.segments.iter().map(|s| s.anomaly.truncation_duration_ms).sum();
+    let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms.abs()).sum();
+    let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms.abs()).sum();
+    let total_truncation: f64 = report.segments.iter().map(|s| s.anomaly.truncation_duration_ms.abs()).sum();
     let avg_spectral: f64 = if n == 0 { 0.0 } else {
         report.segments.iter().map(|s| s.anomaly.spectral_artifacts_score).sum::<f64>() / n as f64
     };
@@ -165,7 +165,7 @@ pub fn print_console_report(report: &EvaluationReport) {
             } else {
                 seg.quality.vnsim
             };
-            println!("    低频相似度: {:.4}  高频��似度: {:.4}", low_sim, high_sim);
+            println!("    低频相似度: {:.4}  高频相似度: {:.4}", low_sim, high_sim);
         }
 
         let energy_mean = if seg.band_energy_ratios.is_empty() {
@@ -182,8 +182,10 @@ pub fn print_console_report(report: &EvaluationReport) {
                          seg.anomaly.dropout_duration_ms, seg.anomaly.dropouts.len());
             }
             if !seg.anomaly.warpings.is_empty() {
+                // 显示漂移时长，绝对值避免 -0ms
+                let warping_ms = seg.anomaly.warping_duration_ms.abs();
                 println!("    时轴漂移: {:.0}ms ({}次)", 
-                         seg.anomaly.warping_duration_ms, seg.anomaly.warpings.len());
+                         warping_ms, seg.anomaly.warpings.len());
             }
             if seg.anomaly.truncation_duration_ms > 0.0 {
                 println!("    内容截断: {:.0}ms ({}次)", 
