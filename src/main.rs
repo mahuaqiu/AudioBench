@@ -103,6 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 用于收集三维异常检测的数据
     let mut alignment_offsets: Vec<f64> = Vec::new();
+    let mut ref_segment_gaps: Vec<f64> = Vec::new(); // 参考音频段间距（用于时轴漂移检测）
     let mut all_patch_sims: Vec<Vec<visqol::PatchSimilarityResult>> = Vec::new();
 
     for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
@@ -111,6 +112,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 收集对齐偏移（秒）
         alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
+        // 收集参考段间距（当前段开始到下一段开始的预期间距）
+        if seg_idx < num_segments - 1 {
+            ref_segment_gaps.push(ref_duration);
+        }
 
         // 调试：打印分段提取的详细信息
         let seg_samples = &rec_audio.samples[seg_start..seg_end];
@@ -160,12 +165,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("      MOS-LQO: {:.2}, VNSIM: {:.4}", 
                  visqol_result.moslqo, visqol_result.vnsim);
 
-        // 时域中断检测（维度一）
+        // 时域中断检测（维度一），使用 seg_degraded 的实际长度排除补零尾段
+        let seg_actual_len = seg_end - seg_start; // 实际音频长度（不含补零）
         let dropout_events = metrics::detect_dropouts(
             &ref_audio.samples,
             &seg_degraded,
             ref_audio.sample_rate,
-            &metrics::DropoutDetectorConfig::default(),
+            &metrics::DropoutDetectorConfig::for_sample_rate(ref_audio.sample_rate),
+            seg_actual_len, // 有效长度，排除补零尾段
         );
         let dropout_duration_ms: f64 = dropout_events.iter().map(|e| e.duration_ms).sum();
         let anomaly = metrics::AudioAnomalyReport {
@@ -202,12 +209,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let warping_threshold = 0.1; // 10% 偏差阈值
     let warping_events = metrics::detect_warpings(
         &alignment_offsets,
-        ref_duration,
+        &ref_segment_gaps,
         warping_threshold,
     );
 
     // 维度三：频谱损伤检测
-    let artifact_threshold = 0.4; // 相似度低于 0.4 判定为损伤
+    let artifact_threshold = 0.3; // 相似度低于 0.3 判定为损伤
     let (_spectral_score, spectral_events) = metrics::detect_spectral_artifacts(
         &all_patch_sims,
         artifact_threshold,

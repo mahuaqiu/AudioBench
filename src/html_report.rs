@@ -265,7 +265,6 @@ var energyBandLabels = energyData.length > 0 && energyData[0].length > 0
 new Chart(document.getElementById('chartEnergy'),{{
   type:'line',
   data:{{labels:energyBandLabels,datasets:energyDatasets}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}},legend:multiSegLegend(energyData.length)}}}}
   options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}},legend:multiSegLegend(energyData.length),tooltip:{{callbacks:{{title:function(items){{return bandTooltipLabel(items[0].label,items[0].dataIndex);}}}}}}}}}}
 }});
 
@@ -512,7 +511,7 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
             if warping_ms > 0.0 {
                 parts.push(format!("漂移{:.0}ms", warping_ms));
             }
-            if spectral > 0.0 {
+            if spectral > 0.1 {
                 parts.push(format!("损伤{:.0}%", spectral * 100.0));
             }
             parts.join(", ")

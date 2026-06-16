@@ -157,6 +157,20 @@ impl Default for DropoutDetectorConfig {
     }
 }
 
+/// 根据采样率创建默认配置（自动适配不同采样率）
+impl DropoutDetectorConfig {
+    pub fn for_sample_rate(sample_rate: u32) -> Self {
+        let frame_samples = (sample_rate as f64 * 0.020) as usize; // 20ms 帧长
+        Self {
+            silence_threshold: 0.005,
+            min_duration_ms: 20.0,
+            attenuation_threshold: 0.05,
+            frame_size: frame_samples,
+            hop_size: frame_samples / 2,
+        }
+    }
+}
+
 /// 计算一段采样的 RMS 能量
 fn compute_rms(samples: &[f64]) -> f64 {
     if samples.is_empty() { return 0.0; }
@@ -164,11 +178,19 @@ fn compute_rms(samples: &[f64]) -> f64 {
 }
 
 /// 维度一：时域中断检测
+/// 
+/// # Arguments
+/// *  - 参考音频样本
+/// *  - 录制音频（待检测段）样本
+/// *  - 采样率
+/// *  - 检测配置
+/// *  - 有效长度（排除补零尾段），0 表示使用整个数组
 pub fn detect_dropouts(
     reference: &[f64],
     degraded: &[f64],
     sample_rate: u32,
     config: &DropoutDetectorConfig,
+    valid_len: usize,
 ) -> Vec<DropoutEvent> {
     let frame_size = config.frame_size.min(reference.len());
     let hop_size = config.hop_size.max(1);
@@ -181,8 +203,11 @@ pub fn detect_dropouts(
     let mut dropout_deg_rms_acc = 0.0f64;
     let mut dropout_frame_count = 0usize;
     
+    // 有效检测范围：排除补零尾段
+    let max_valid_idx = if valid_len > 0 { valid_len } else { reference.len().min(degraded.len()) };
+    
     let mut frame_idx = 0;
-    while frame_idx + frame_size <= reference.len() && frame_idx + frame_size <= degraded.len() {
+    while frame_idx + frame_size <= max_valid_idx {
         let ref_frame = &reference[frame_idx..frame_idx + frame_size];
         let deg_frame = &degraded[frame_idx..frame_idx + frame_size];
         
@@ -262,9 +287,14 @@ pub fn detect_dropouts(
 // ============================================================
 
 /// 维度二：时轴漂移检测
+/// 
+/// # Arguments
+/// *  - 各段在录制音频中的起始偏移（秒）
+/// *  - 各段之间的参考音频间距（秒），长度为段数-1
+/// *  - 漂移比例阈值，超过此值判定为漂移
 pub fn detect_warpings(
     alignment_offsets: &[f64],
-    ref_duration: f64,
+    ref_gaps: &[f64],
     warping_threshold: f64,
 ) -> Vec<WarpingEvent> {
     if alignment_offsets.len() < 2 {
@@ -275,7 +305,8 @@ pub fn detect_warpings(
     
     for i in 0..alignment_offsets.len() - 1 {
         let deg_gap = alignment_offsets[i + 1] - alignment_offsets[i];
-        let ref_gap = ref_duration;
+        // 使用实际的参考段间距，而非假设恒等于 ref_duration
+        let ref_gap = ref_gaps.get(i).copied().unwrap_or(0.0);
         
         let drift = deg_gap - ref_gap;
         let drift_ratio = if ref_gap > 0.0 { drift / ref_gap } else { 0.0 };
@@ -371,11 +402,15 @@ pub fn detect_anomalies(
     config: &AnomalyDetectConfig,
 ) -> AudioAnomalyReport {
     // 维度一：时域中断
-    let dropouts = detect_dropouts(reference, degraded, sample_rate, &config.dropout_config);
+    let dropouts = detect_dropouts(reference, degraded, sample_rate, &config.dropout_config, 0);
     let dropout_duration_ms: f64 = dropouts.iter().map(|e| e.duration_ms).sum();
     
     // 维度二：时轴漂移
-    let warpings = detect_warpings(alignment_offsets_s, ref_duration, config.warping_threshold);
+    // 时轴漂移检测：构建与 alignment_offsets 对应的参考段间距
+    let ref_gaps: Vec<f64> = std::iter::repeat(ref_duration)
+        .take(alignment_offsets_s.len().saturating_sub(1))
+        .collect();
+    let warpings = detect_warpings(alignment_offsets_s, &ref_gaps, config.warping_threshold);
     let warping_duration_ms: f64 = warpings.iter().map(|w| w.drift_ms.abs()).sum();
     
     // 维度三：频谱损伤
