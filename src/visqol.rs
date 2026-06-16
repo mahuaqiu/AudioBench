@@ -188,7 +188,7 @@ pub fn evaluate_with_visqol(
         cmd.arg("--use_speech_mode");
     }
 
-    println!("[DEBUG] 执行: {:?}", cmd);
+    println!("[*] ViSQOL 命令: {:?}", cmd);
 
     // 执行命令
     let output = cmd.output()
@@ -309,27 +309,20 @@ fn parse_patch_from_json(json_path: &Path, _num_bands: usize) -> Vec<PatchSimila
     let content = match fs::read_to_string(json_path) {
         Ok(c) => c,
         Err(e) => {
-            println!("[DEBUG] 读取 JSON 文件失败: {}", e);
+            println!("[WARN] 读取 ViSQOL JSON 文件失败: {}", e);
             return vec![];
         }
     };
 
-    println!("[DEBUG] ViSQOL JSON 内容长度: {} bytes", content.len());
-    
     // 解析JSON，ViSQOL protobuf JSON 使用 camelCase 字段名
     let json: serde_json::Value = match serde_json::from_str(&content) {
         Ok(j) => j,
         Err(e) => {
-            println!("[DEBUG] JSON 解析失败: {}", e);
+            println!("[WARN] ViSQOL JSON 解析失败: {}", e);
             return vec![];
         }
     };
 
-    // 打印顶层键用于调试
-    if let Some(obj) = json.as_object() {
-        println!("[DEBUG] JSON顶层键: {:?}", obj.keys().collect::<Vec<_>>());
-    }
-    
     // 查找 patchSims 字段（protobuf JSON camelCase 命名）
     let patches = json.get("patchSims")
         .or_else(|| json.get("patch_sims"))
@@ -338,12 +331,12 @@ fn parse_patch_from_json(json_path: &Path, _num_bands: usize) -> Vec<PatchSimila
     let patches = match patches {
         Some(p) => p,
         None => {
-            println!("[DEBUG] 未找到 patchSims 字段");
+            println!("[WARN] 未找到 patchSims 字段");
             return vec![];
         }
     };
 
-    println!("[DEBUG] 找到 patchSims, patch数量: {}", patches.len());
+    println!("[*] 解析 {} 个 patch 时间片段", patches.len());
     let mut results = Vec::new();
 
     for patch in patches {
@@ -369,9 +362,6 @@ fn parse_patch_from_json(json_path: &Path, _num_bands: usize) -> Vec<PatchSimila
                 .and_then(|v| v.as_f64())
                 .unwrap_or(0.0);
 
-            println!("[DEBUG]   patch: similarity={:.4}, ref=[{:.2}-{:.2}], deg=[{:.2}-{:.2}]",
-                similarity, ref_start, ref_end, deg_start, deg_end);
-
             results.push(PatchSimilarityResult {
                 similarity,
                 ref_patch_start_time: ref_start,
@@ -379,11 +369,9 @@ fn parse_patch_from_json(json_path: &Path, _num_bands: usize) -> Vec<PatchSimila
                 deg_patch_start_time: deg_start,
                 deg_patch_end_time: deg_end,
             });
-        } else {
-            println!("[DEBUG]   patch 不是对象: {:?}", patch);
         }
     }
 
-    println!("[DEBUG] 成功解析 {} 个 patch", results.len());
+    println!("[*] patch 时间片段解析完成");
     results
 }
