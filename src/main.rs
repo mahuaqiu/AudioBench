@@ -101,9 +101,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut segment_results = Vec::with_capacity(num_segments);
 
+    // 用于收集三维异常检测的数据
+    let mut alignment_offsets: Vec<f64> = Vec::new();
+    let mut all_patch_sims: Vec<Vec<visqol::PatchSimilarityResult>> = Vec::new();
+
     for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
         let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
+
+        // 收集对齐偏移（秒）
+        alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
 
         // 调试：打印分段提取的详细信息
         let seg_samples = &rec_audio.samples[seg_start..seg_end];
@@ -143,6 +150,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 调用 visqol 进行评估
         let visqol_result = visqol::evaluate_with_visqol(&ref_temp, &deg_temp, mode)?;
+
+        // 收集该段的 patch 相似度数据
+        all_patch_sims.push(visqol_result.patch_sims.clone());
 
         // ViSQOL 频段能量比（fvdegenergy）
         let band_energy_ratios = visqol_result.fvdegenergy.clone();
@@ -186,6 +196,57 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             level_deg,
             band_energy_ratios,
         });
+    }
+
+    // 维度二：时轴漂移检测（在所有分段完成后）
+    let warping_threshold = 0.1; // 10% 偏差阈值
+    let warping_events = metrics::detect_warpings(
+        &alignment_offsets,
+        ref_duration,
+        warping_threshold,
+    );
+
+    // 维度三：频谱损伤检测
+    let artifact_threshold = 0.4; // 相似度低于 0.4 判定为损伤
+    let (_spectral_score, spectral_events) = metrics::detect_spectral_artifacts(
+        &all_patch_sims,
+        artifact_threshold,
+    );
+
+    // 将时轴漂移和频谱损伤结果更新到每段报告中
+    for (seg_idx, seg_result) in segment_results.iter_mut().enumerate() {
+        // 合并时轴漂移事件���对应段
+        let seg_warpings: Vec<metrics::WarpingEvent> = warping_events.iter()
+            .filter(|w| w.segment_before == seg_idx || w.segment_after == seg_idx)
+            .cloned()
+            .collect();
+        let seg_warping_ms: f64 = seg_warpings.iter().map(|w| w.drift_ms.abs()).sum();
+
+        // 合并频谱损伤事件到对应段
+        let seg_artifacts: Vec<metrics::SpectralArtifactEvent> = spectral_events.iter()
+            .filter(|a| a.segment_index == seg_idx)
+            .cloned()
+            .collect();
+        
+        // 计算该段的频谱损伤比例
+        let seg_patch_count = all_patch_sims.get(seg_idx).map(|p| p.len()).unwrap_or(0);
+        let seg_low_count = seg_artifacts.len();
+        let seg_spectral_score = if seg_patch_count > 0 {
+            seg_low_count as f64 / seg_patch_count as f64
+        } else {
+            0.0
+        };
+
+        // 更新异常检测报告
+        let has_anomaly = seg_result.anomaly.has_anomaly 
+            || !seg_warpings.is_empty() 
+            || seg_spectral_score > 0.1;
+        
+        seg_result.anomaly.warpings = seg_warpings;
+        seg_result.anomaly.warping_duration_ms = seg_warping_ms;
+        seg_result.anomaly.spectral_artifacts_score = seg_spectral_score;
+        seg_result.anomaly.spectral_artifacts = seg_artifacts;
+        seg_result.anomaly.has_anomaly = has_anomaly;
     }
     
     // 全局对齐信息（使用第一段的对齐信息）

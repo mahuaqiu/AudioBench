@@ -342,6 +342,7 @@ pub fn detect_spectral_artifacts(
 // ============================================================
 
 /// 综合异常检测参数
+#[allow(dead_code)]
 pub struct AnomalyDetectConfig {
     pub dropout_config: DropoutDetectorConfig,
     pub warping_threshold: f64,
@@ -359,6 +360,7 @@ impl Default for AnomalyDetectConfig {
 }
 
 /// 综合音频异常检测
+#[allow(dead_code)]
 pub fn detect_anomalies(
     reference: &[f64],
     degraded: &[f64],
