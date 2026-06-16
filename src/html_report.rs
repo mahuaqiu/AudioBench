@@ -48,9 +48,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
         .unwrap_or_default();
     let center_freq_json = serde_json::to_string(&center_freq_bands).unwrap_or("[]".to_string());
 
-    // 卡顿统计
-    let dropout_count: usize = report.segments.iter().map(|s| s.dropouts.count).sum();
-    let dropout_dur: f64 = report.segments.iter().map(|s| s.dropouts.total_duration_ms).sum();
+    // 异常检测统计
+    let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms).sum();
+    let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms).sum();
+    let avg_spectral: f64 = if report.segments.is_empty() { 0.0 } else { report.segments.iter().map(|s| s.anomaly.spectral_artifacts_score).sum::<f64>() / report.segments.len() as f64 };
 
     // 模式名称
     let mode_name = if report.config.target_sample_rate == 16000 { "语音模式" } else { "音频模式" };
@@ -139,14 +140,24 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-hint">全局神经图相似度（0-1），1=完全相同</div>
 </div>
 <div class="card">
-<div class="card-label">卡顿检测</div>
-<div class="card-value">{dropout_count}次</div>
-<div class="card-hint">信号中断/丢包事件<br>总时长：{dropout_dur:.0}ms</div>
+<div class="card-label">时域中断</div>
+<div class="card-value">{dropout_dur:.0}ms</div>
+<div class="card-hint">能量断崖/静音事件</div>
+</div>
+<div class="card">
+<div class="card-label">时轴漂移</div>
+<div class="card-value">{warping_dur:.0}ms</div>
+<div class="card-hint">段间时长偏差</div>
+</div>
+<div class="card">
+<div class="card-label">频谱损伤</div>
+<div class="card-value">{spectral_score_pct}</div>
+<div class="card-hint">低相似度片段比例</div>
 </div>
 </div>
 
 <div class="section"><div class="section-title">各段详细评分</div>
-<table id="segmentsTable"><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>卡顿</th></tr></thead>
+<table id="segmentsTable"><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>异常</th></tr></thead>
 <tbody>{table_rows}</tbody>
 </table>
 <div class="pagination" id="tablePagination"></div>
@@ -186,8 +197,12 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dd>每个频带中录制信号相对于参考信号的能量变化比例。值>1表示能量增加(如添加噪声)，值<1表示能量减少(如高频衰减)。</dd>
 <dt><span class="tag">Patch相似度</span>时间片段相似度</dt>
 <dd>ViSQOL将音频按约0.6秒切分为多个Patch，分别计算每个Patch的NSIM。多段叠加显示便于定位问题时段。</dd>
-<dt><span class="tag">卡顿检测</span>信号中断事件</dt>
-<dd>检测录制音频中参考有声但录制无声的片段（丢包、缓冲区欠载等）。</dd>
+<dt><span class="tag">时域中断</span>Audio Dropout</dt>
+<dd>检测录制信号相对于参考信号的能量断崖式下跌（异常静音、丢包、缓冲区欠载等）。</dd>
+<dt><span class="tag">时轴漂移</span>Time Warping</dt>
+<dd>检测多段对齐之间的间距偏差，反映时轴被拉伸或压缩（网络抖动、缓冲策略问题）。</dd>
+<dt><span class="tag">频谱损伤</span>Spectral Artifacts</dt>
+<dd>检测频域结构被破坏但时域能量正常的片段（编解码失真、PLC 算法伪造等）。</dd>
 </dl>
 </div>
 
@@ -420,8 +435,9 @@ function multiSegLegend(segCount) {{
         mos_min = report.overall.moslqo_min,
         mos_max = report.overall.moslqo_max,
         vnsim_mean = report.overall.vnsim_mean,
-        dropout_count = dropout_count,
-        dropout_dur = dropout_dur,
+        dropout_dur = total_dropout,
+        warping_dur = total_warping,
+        spectral_score_pct = avg_spectral * 100.0,
         // JS 字符串字面量注入
         report_json = to_js_str(&json_data),
         seg_labels_json = to_js_str(&seg_labels_json),
@@ -484,11 +500,27 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         } else {
             seg.band_energy_ratios.iter().sum::<f64>() / seg.band_energy_ratios.len() as f64
         };
-        let dropout = if seg.dropouts.count > 0 {
-            format!("{}次/{:.0}ms", seg.dropouts.count, seg.dropouts.total_duration_ms)
-        } else { "无".to_string() };
+        // 异常检测：时域中断 + 时轴漂移 + 频谱损伤
+        let dropout_ms = seg.anomaly.dropout_duration_ms;
+        let warping_ms = seg.anomaly.warping_duration_ms;
+        let spectral = seg.anomaly.spectral_artifacts_score;
+        let anomaly_str = if seg.anomaly.has_anomaly {
+            let mut parts = vec![];
+            if dropout_ms > 0.0 {
+                parts.push(format!("中断{:.0}ms", dropout_ms));
+            }
+            if warping_ms > 0.0 {
+                parts.push(format!("漂移{:.0}ms", warping_ms));
+            }
+            if spectral > 0.0 {
+                parts.push(format!("损伤{:.0}%", spectral * 100.0));
+            }
+            parts.join(", ")
+        } else {
+            "无".to_string()
+        };
         format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td>{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{}</td></tr>",
-            i+1, seg.start_time_s, seg.end_time_s, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, dropout)
+            i+1, seg.start_time_s, seg.end_time_s, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, anomaly_str)
     }).collect()
 }
 

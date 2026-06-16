@@ -3,85 +3,59 @@
 //! 支持分段评估：每段独立评分 + 整体统计汇总
 
 use serde::Serialize;
-use crate::metrics::{DropoutResult, LevelResult};
+use crate::metrics::{AudioAnomalyReport, LevelResult};
 use crate::visqol::VisqolResult as QualityResult;
 
 
 /// 评估配置信息
 #[derive(Debug, Serialize)]
 pub struct ReportConfig {
-    /// 参考音频路径
     pub reference_path: String,
-    /// 录制音频路径
     pub recorded_path: String,
-    /// 目标采样率
     pub target_sample_rate: u32,
 }
 
 /// 对齐信息
 #[derive(Debug, Serialize)]
 pub struct AlignmentInfo {
-    /// 偏移采样点数
     pub offset_samples: usize,
-    /// 延迟时间（毫秒）
     pub delay_ms: f64,
-    /// 对齐置信度
     pub confidence: f64,
 }
 
 /// 单段评估结果
 #[derive(Debug, Serialize)]
 pub struct SegmentResult {
-    /// 分段序号（从 0 开始）
     pub segment_index: usize,
-    /// 分段在录制音频中的起始时间（秒）
     pub start_time_s: f64,
-    /// 分段在录制音频中的结束时间（秒）
     pub end_time_s: f64,
-    /// 质量评估结��（ViSQOL 兼容指标）
     pub quality: QualityResult,
-    /// 卡顿检测结果
-    pub dropouts: DropoutResult,
-    /// 参考音频幅值统计
+    /// 音频异常检测报告（三维：时域中断、时轴漂移、频谱损伤）
+    pub anomaly: AudioAnomalyReport,
     pub level_ref: LevelResult,
-    /// 录制音频幅值统计
     pub level_deg: LevelResult,
-    /// ViSQOL 频段能量比（fvdegenergy）
     pub band_energy_ratios: Vec<f64>,
 }
 
-/// ViSQOL 频段能量比（fvdegenergy）
 /// 整体统计汇总
 #[derive(Debug, Serialize)]
 pub struct OverallStats {
-    /// 分段总数
     pub segment_count: usize,
-    /// MOS-LQO 均值
     pub moslqo_mean: f64,
-    /// MOS-LQO 最小值
     pub moslqo_min: f64,
-    /// MOS-LQO 最大值
     pub moslqo_max: f64,
-    /// MOS-LQO 标准差
     pub moslqo_stddev: f64,
-    /// VNSIM 均值
     pub vnsim_mean: f64,
 }
 
 /// 完整评估报告
 #[derive(Debug, Serialize)]
 pub struct EvaluationReport {
-    /// 评估配置
     pub config: ReportConfig,
-    /// 对齐信息
     pub alignment: AlignmentInfo,
-    /// 参考音频时长（秒）
     pub reference_duration_s: f64,
-    /// 录制音频时长（秒）
     pub recorded_duration_s: f64,
-    /// 整体统计汇总
     pub overall: OverallStats,
-    /// 各段详细结果
     pub segments: Vec<SegmentResult>,
 }
 
@@ -140,7 +114,6 @@ pub fn print_console_report(report: &EvaluationReport) {
     println!("                    音频质量评估报告");
     println!("{}", "=".repeat(60));
 
-    // 基本信息
     println!("\n【基本信息】");
     println!("  参考音频: {}", report.config.reference_path);
     println!("  录制音频: {}", report.config.recorded_path);
@@ -150,12 +123,10 @@ pub fn print_console_report(report: &EvaluationReport) {
              report.config.target_sample_rate,
              format!("{} Hz", report.config.target_sample_rate));
 
-    // 对齐信息
     println!("\n【时间对齐】");
     println!("  传输延迟: {:.1} ms", report.alignment.delay_ms);
     println!("  对齐置信度: {:.2}%", report.alignment.confidence * 100.0);
 
-    // 整体统计
     let o = &report.overall;
     println!("\n【整体统计】");
     println!("  分段数: {}", o.segment_count);
@@ -163,7 +134,16 @@ pub fn print_console_report(report: &EvaluationReport) {
              o.moslqo_mean, o.moslqo_min, o.moslqo_max, o.moslqo_stddev);
     println!("  VNSIM 均值: {:.4}", o.vnsim_mean);
 
-    // 各段详细结果
+    // 异常统计汇总
+    let n = report.segments.len();
+    let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms).sum();
+    let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms).sum();
+    let avg_spectral: f64 = if n == 0 { 0.0 } else {
+        report.segments.iter().map(|s| s.anomaly.spectral_artifacts_score).sum::<f64>() / n as f64
+    };
+    println!("  异常检测: 时域中断={:.0}ms, 时轴漂移={:.0}ms, 频谱损伤={:.2}",
+             total_dropout, total_warping, avg_spectral);
+
     println!("\n{}", "-".repeat(60));
     println!("                    各段详细评分");
     println!("{}", "-".repeat(60));
@@ -175,7 +155,6 @@ pub fn print_console_report(report: &EvaluationReport) {
         println!("    MOS-LQO: {:.2}  VNSIM: {:.4}",
                  seg.quality.moslqo, seg.quality.vnsim);
 
-        // 频段分析摘要
         if !seg.quality.fvnsim.is_empty() {
             let low_n = (seg.quality.fvnsim.len() / 3).max(1);
             let high_n = seg.quality.fvnsim.len().saturating_sub(seg.quality.fvnsim.len() * 2 / 3);
@@ -185,10 +164,9 @@ pub fn print_console_report(report: &EvaluationReport) {
             } else {
                 seg.quality.vnsim
             };
-            println!("    低频相似度: {:.4}  高频相似度: {:.4}", low_sim, high_sim);
+            println!("    低频相似度: {:.4}  高频��似度: {:.4}", low_sim, high_sim);
         }
 
-        // 能量比均值
         let energy_mean = if seg.band_energy_ratios.is_empty() {
             0.0
         } else {
@@ -196,13 +174,24 @@ pub fn print_console_report(report: &EvaluationReport) {
         };
         println!("    能量比均值: {:.4}", energy_mean);
 
-        // 卡顿检测
-        if seg.dropouts.count > 0 {
-            println!("    卡顿: {} 次, 总时长 {:.0} ms", 
-                     seg.dropouts.count, seg.dropouts.total_duration_ms);
+        // 三维异常检测结果
+        if seg.anomaly.has_anomaly {
+            if seg.anomaly.dropout_duration_ms > 0.0 {
+                println!("    时域中断: {:.0}ms ({}次)", 
+                         seg.anomaly.dropout_duration_ms, seg.anomaly.dropouts.len());
+            }
+            if !seg.anomaly.warpings.is_empty() {
+                println!("    时轴漂移: {:.0}ms ({}次)", 
+                         seg.anomaly.warping_duration_ms, seg.anomaly.warpings.len());
+            }
+            if seg.anomaly.spectral_artifacts_score > 0.0 {
+                println!("    频谱损伤: {:.1}%", 
+                         seg.anomaly.spectral_artifacts_score * 100.0);
+            }
+        } else {
+            println!("    异常检测: 无");
         }
 
-        // 幅值统计
         println!("    参考幅值: RMS={:.4}, 峰值={:.4}", seg.level_ref.rms, seg.level_ref.peak);
         println!("    录制幅值: RMS={:.4}, 峰值={:.4}", seg.level_deg.rms, seg.level_deg.peak);
     }

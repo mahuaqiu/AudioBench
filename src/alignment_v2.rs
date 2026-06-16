@@ -421,7 +421,7 @@ pub fn find_all_alignments_hybrid(
         if !too_close {
             deduped.push(r);
         }
-        if deduped.len() >= 10 {
+        if deduped.len() >= 50 {
             break;
         }
     }

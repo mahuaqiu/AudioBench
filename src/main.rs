@@ -150,15 +150,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("      MOS-LQO: {:.2}, VNSIM: {:.4}", 
                  visqol_result.moslqo, visqol_result.vnsim);
 
-        // 卡顿检测
-        let dropouts = metrics::detect_dropouts(
+        // 时域中断检测（维度一）
+        let dropout_events = metrics::detect_dropouts(
             &ref_audio.samples,
             &seg_degraded,
             ref_audio.sample_rate,
-            0.005,
-            20.0,
-            0,
+            &metrics::DropoutDetectorConfig::default(),
         );
+        let dropout_duration_ms: f64 = dropout_events.iter().map(|e| e.duration_ms).sum();
+        let anomaly = metrics::AudioAnomalyReport {
+            has_anomaly: !dropout_events.is_empty(),
+            dropouts: dropout_events,
+            dropout_duration_ms,
+            warpings: vec![],
+            warping_duration_ms: 0.0,
+            spectral_artifacts_score: 0.0,
+            spectral_artifacts: vec![],
+        };
 
         // 幅值统计
         let level_ref = metrics::compute_level_stats(&ref_audio.samples);
@@ -173,7 +181,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             start_time_s: seg_start_time,
             end_time_s: seg_end_time,
             quality: visqol_result.into(),
-            dropouts,
+            anomaly,
             level_ref,
             level_deg,
             band_energy_ratios,
