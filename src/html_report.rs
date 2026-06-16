@@ -176,7 +176,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dt><span class="tag">VNSIM</span>全局神经图相似度</dt>
 <dd>基于Gammatone听觉滤波器组提取的频谱图，计算参考与录制之间的NSIM。值域0-1，1表示频谱完全一致。</dd>
 <dt><span class="tag">fVNSIM</span>各频段相似度</dt>
-<dd>VNSIM在每个Gammatone频带上的分解值。低频带(1-10)对应50-500Hz，中频带(11-20)对应500-2000Hz，高频带(21-32)对应2000Hz以上。</dd>
+<dd>每个Gammatone频带上的参考与录制频谱相似度，值域0-1：0=频谱完全不匹配，1=该频带频谱完全一致。低频带(1-10)对应50-500Hz，中频带(11-20)对应500-2000Hz，高频带(21-32)对应2000Hz以上。某频带值低说明该频率范围存在明显降质。</dd>
 <dt><span class="tag">fvdegenergy</span>频段能量比</dt>
 <dd>每个频带中录制信号相对于参考信号的能量变化比例。值>1表示能量增加(如添加噪声)，值<1表示能量减少(如高频衰减)。</dd>
 <dt><span class="tag">Patch相似度</span>时间片段相似度</dt>
