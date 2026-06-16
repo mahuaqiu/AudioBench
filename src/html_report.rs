@@ -169,15 +169,15 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="pagination" id="tablePagination"></div>
 </div>
 
-<div class="section"><div class="section-title">MOS-LQO 分段趋势</div>
+<div class="section" id="sectionMos"><div class="section-title">MOS-LQO 分段趋势</div>
 <div class="chart-full"><canvas id="chartMos"></canvas></div>
 </div>
 
 <div class="chart-row">
-<div class="section" style="margin-bottom:0"><div class="section-title">VNSIM 分段趋势</div>
+<div class="section" style="margin-bottom:0" id="sectionVnsim"><div class="section-title">VNSIM 分段趋势</div>
 <div class="chart-full"><canvas id="chartVnsim"></canvas></div>
 </div>
-<div class="section" style="margin-bottom:0"><div class="section-title">Patch 时间片段相似度</div>
+<div class="section" style="margin-bottom:0" id="sectionPatch"><div class="section-title">Patch 时间片段相似度</div>
 <div class="chart-full"><canvas id="chartPatch"></canvas></div>
 </div>
 </div>
@@ -203,11 +203,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dd>每个频带中录制信号相对于参考信号的能量变化比例。值>1表示能量增加(如添加噪声)，值<1表示能量减少(如高频衰减)。</dd>
 <dt><span class="tag">Patch相似度</span>时间片段相似度</dt>
 <dd>ViSQOL将音频按约0.6秒切分为多个Patch，分别计算每个Patch的NSIM。多段叠加显示便于定位问题时段。</dd>
-<dt><span class="tag">时域中断</span>Audio Dropout</dt>
+<dt><span class="tag">时域中断</span>异常静音/丢包</dt>
 <dd>检测网络丢包或长时间静音导致的能量断崖下跌。</dd>
-<dt><span class="tag">时轴漂移</span>Time Warping</dt>
+<dt><span class="tag">时轴漂移</span>抖动拉伸/压缩</dt>
 <dd>检测同一段音频内容在录制端的时长偏差，反映网络抖动导致的音频拉长/压缩。</dd>
-<dt><span class="tag">频谱损伤</span>Spectral Artifacts</dt>
+<dt><span class="tag">频谱损伤</span>机械音</dt>
 <dd>检测时域能量正常但频域结构被破坏的片段（PLC 伪造音、编解码杂音等）。</dd>
 </dl>
 </div>
@@ -234,7 +234,7 @@ if(segLabels.length > 1){{
     options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
   }});
 }} else {{
-  document.getElementById('chartMos').parentElement.style.display = 'none';
+  document.getElementById('sectionMos').style.display = 'none';
 }}
 
 // VNSIM 分段趋势（单段不显示）
@@ -245,7 +245,7 @@ if(segLabels.length > 1){{
     options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
   }});
 }} else {{
-  document.getElementById('chartVnsim').parentElement.style.display = 'none';
+  document.getElementById('sectionVnsim').style.display = 'none';
 }}
 
 // fVNSIM 频段相似度 - 动态生成bandLabels基于实际数据长度
@@ -304,7 +304,7 @@ if(patchData.length > 0 && patchData[0].length > 0){{
     options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}},legend:multiSegLegend(patchData.length)}}}}
   }});
 }} else {{
-  document.getElementById('chartPatch').parentElement.style.display = 'none';
+  document.getElementById('sectionPatch').style.display = 'none';
 }}
 
 // 多段图例配置：段数<=8正常显示，>8自动折叠
