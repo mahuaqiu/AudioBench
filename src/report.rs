@@ -30,7 +30,7 @@ pub struct SegmentResult {
     pub start_time_s: f64,
     pub end_time_s: f64,
     pub quality: QualityResult,
-    /// 音频异常检测报告（三维：时域中断、时轴漂移、频谱损伤）
+    /// 音频异常检测报告（时域中断、时轴漂移、频谱损伤）
     pub anomaly: AudioAnomalyReport,
     pub level_ref: LevelResult,
     pub level_deg: LevelResult,
@@ -175,7 +175,7 @@ pub fn print_console_report(report: &EvaluationReport) {
         };
         println!("    能量比均值: {:.4}", energy_mean);
 
-        // 三维异常检测结果
+        // 异常检测结果
         if seg.anomaly.has_anomaly {
             if seg.anomaly.dropout_duration_ms > 0.0 {
                 println!("    时域中断: {:.0}ms ({}次)", 

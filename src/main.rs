@@ -101,7 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut segment_results = Vec::with_capacity(num_segments);
 
-    // 用于收集三维异常检测的数据
+    // 用于收集异常检测的数据
     let mut alignment_offsets: Vec<f64> = Vec::new();
     let mut all_patch_sims: Vec<Vec<visqol::PatchSimilarityResult>> = Vec::new();
     // 各段实际音频样本数（不含末尾补零），用于内容截断检测
