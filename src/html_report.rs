@@ -51,6 +51,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     // 异常检测统计
     let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms).sum();
     let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms).sum();
+    let total_truncation: f64 = report.segments.iter().map(|s| s.anomaly.truncation_duration_ms).sum();
     let avg_spectral: f64 = if report.segments.is_empty() { 0.0 } else { report.segments.iter().map(|s| s.anomaly.spectral_artifacts_score).sum::<f64>() / report.segments.len() as f64 };
 
     // 模式名称
@@ -148,6 +149,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-label">时轴漂移</div>
 <div class="card-value">{warping_dur:.0}ms</div>
 <div class="card-hint">段间时长偏差</div>
+</div>
+<div class="card">
+<div class="card-label">内容截断</div>
+<div class="card-value">{truncation_dur:.0}ms</div>
+<div class="card-hint">段内内容缺失/裁剪</div>
 </div>
 <div class="card">
 <div class="card-label">频谱损伤</div>
@@ -436,6 +442,7 @@ function multiSegLegend(segCount) {{
         vnsim_mean = report.overall.vnsim_mean,
         dropout_dur = total_dropout,
         warping_dur = total_warping,
+        truncation_dur = total_truncation,
         spectral_score_pct = avg_spectral * 100.0,
         // JS 字符串字面量注入
         report_json = to_js_str(&json_data),
@@ -499,9 +506,10 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         } else {
             seg.band_energy_ratios.iter().sum::<f64>() / seg.band_energy_ratios.len() as f64
         };
-        // 异常检测：时域中断 + 时轴漂移 + 频谱损伤
+        // 异常检测：时域中断 + 时轴漂移 + 内容截断 + 频谱损伤
         let dropout_ms = seg.anomaly.dropout_duration_ms;
         let warping_ms = seg.anomaly.warping_duration_ms;
+        let truncation_ms = seg.anomaly.truncation_duration_ms;
         let spectral = seg.anomaly.spectral_artifacts_score;
         let anomaly_str = if seg.anomaly.has_anomaly {
             let mut parts = vec![];
@@ -510,6 +518,9 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
             }
             if warping_ms > 0.0 {
                 parts.push(format!("漂移{:.0}ms", warping_ms));
+            }
+            if truncation_ms > 0.0 {
+                parts.push(format!("截断{:.0}ms", truncation_ms));
             }
             if spectral > 0.25 {
                 parts.push(format!("损伤{:.0}%", spectral * 100.0));

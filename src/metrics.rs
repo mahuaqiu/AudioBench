@@ -10,24 +10,30 @@
 pub struct AudioAnomalyReport {
     /// 是否存在任何异常
     pub has_anomaly: bool,
-    
+
     /// 时域中断（异常静音/丢包）事件列表
     pub dropouts: Vec<DropoutEvent>,
-    
+
     /// 时域中断总时长 (ms)
     pub dropout_duration_ms: f64,
-    
+
     /// 时轴漂移事件列表
     pub warpings: Vec<WarpingEvent>,
-    
+
     /// 时轴漂移总时长 (ms)
     pub warping_duration_ms: f64,
-    
+
     /// 频谱损伤严重程度 (0.0=无损伤, 1.0=极度损伤)
     pub spectral_artifacts_score: f64,
-    
-    /// 频谱损伤事件列表（低相似度时间段）
+
+    /// 麻烦损伤事件列表（低相似度时间段）
     pub spectral_artifacts: Vec<SpectralArtifactEvent>,
+
+    /// 内容截断/裁剪事件列表（段实际长度明显短于参考）
+    pub truncations: Vec<TruncationEvent>,
+
+    /// 内容截断总时长 (ms)
+    pub truncation_duration_ms: f64,
 }
 
 /// 时域中断事件（异常静音/丢包）
@@ -62,6 +68,19 @@ pub struct WarpingEvent {
     pub drift_ms: f64,
     /// 漂移比例 = drift_ms / ref_gap_ms
     pub drift_ratio: f64,
+}
+
+/// 内容截断/裁剪事件（段实际长度明显短于参考）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TruncationEvent {
+    /// 涉及的段索引
+    pub segment_index: usize,
+    /// 参考音频该段时长 (ms)
+    pub ref_duration_ms: f64,
+    /// 录制音频该段实际时长 (ms)
+    pub deg_duration_ms: f64,
+    /// 截断时长 = ref - deg (ms)，正值表示缺失
+    pub truncation_ms: f64,
 }
 
 /// 频谱损伤事件
@@ -368,46 +387,64 @@ impl Default for WarpingThreshold {
     fn default() -> Self {
         Self {
             abs_ms: 200.0,  // 段间错位超过 200ms 才考虑
-            ratio: 0.03,    // 且相对参考时长偏差超过 3%
+            ratio: 0.05,    // 且相对基准间距偏差超过 5%
         }
     }
 }
 
 /// 维度二：时轴漂移检测
 ///
-/// 仅适用于循环播放（参考音频在录制中出现多次）场景：比较相邻两次出现
-/// 的段间间距是否与参考时长一致。单次播放场景调用方应跳过此函数。
+/// 语义：检测**多段对齐间距之间是否彼此不一致**（时轴被非均匀拉伸/压缩）。
+///
+/// 基准选择的关键决策：基准必须对"循环停顿不固定"天然鲁棒。
+/// - 早期实现用 `ref_duration`（参考时长）做基准，隐含"无缝紧挨循环"假设，
+///   一旦实际录制里段间有停顿，每对相邻段都被算成正漂移（正常音频也被误报）。
+/// - 现在改用**录制段间间距的中位数**做基准：正常循环的段间间距彼此接近，
+///   中位数就是最稳定的代表值；只有**偏离中位数**的段才算漂移。
+///   这样无论循环停顿是 0ms 还是 500ms，只要各段停顿一致，就不报漂移。
+///
+/// 段数门槛：段数 < 4 时直接跳过——中位数在小样本下不稳定，且此时
+/// "间距不一致"本就难以可靠判定（3 段只有 2 个间距，无法形成基准）。
 ///
 /// # Arguments
-/// * `alignment_offsets` - 各段在录制音频中的起始偏移（秒）
-/// * `ref_gaps` - 各段之间的参考音频间距（秒），长度为段数-1
+/// * `alignment_offsets` - 各段在录制音频中的起始偏移（秒），已按时间排序
 /// * `threshold` - 双重阈值（绝对 ms + 比例），同时满足才算漂移
 pub fn detect_warpings(
     alignment_offsets: &[f64],
-    ref_gaps: &[f64],
     threshold: WarpingThreshold,
 ) -> Vec<WarpingEvent> {
-    if alignment_offsets.len() < 2 {
+    // 段数 < 4 时无可靠基准（中位数在小样本下不稳定），直接跳过。
+    if alignment_offsets.len() < 4 {
+        return vec![];
+    }
+
+    // 计算相邻段间距
+    let mut gaps: Vec<f64> = Vec::with_capacity(alignment_offsets.len() - 1);
+    for i in 0..alignment_offsets.len() - 1 {
+        gaps.push(alignment_offsets[i + 1] - alignment_offsets[i]);
+    }
+    if gaps.is_empty() {
+        return vec![];
+    }
+
+    // 基准 = 段间间距的中位数（对"循环停顿不固定"鲁棒）
+    let base_gap = median(&mut gaps);
+    if base_gap <= 0.0 {
         return vec![];
     }
 
     let mut events = Vec::new();
-
-    for i in 0..alignment_offsets.len() - 1 {
-        let deg_gap = alignment_offsets[i + 1] - alignment_offsets[i];
-        // 使用实际的参考段间距，而非假设恒等于 ref_duration
-        let ref_gap = ref_gaps.get(i).copied().unwrap_or(0.0);
-
-        let drift = deg_gap - ref_gap;
+    for (i, &deg_gap) in gaps.iter().enumerate() {
+        let drift = deg_gap - base_gap;
         let drift_ms = drift * 1000.0;
-        let drift_ratio = if ref_gap > 0.0 { drift / ref_gap } else { 0.0 };
+        let drift_ratio = drift / base_gap;
 
         // 双重阈值：绝对 ms 和比例同时超过才判定为漂移
         if drift_ms.abs() > threshold.abs_ms && drift_ratio.abs() > threshold.ratio {
             events.push(WarpingEvent {
                 segment_before: i,
                 segment_after: i + 1,
-                ref_gap_ms: ref_gap * 1000.0,
+                ref_gap_ms: base_gap * 1000.0,
                 deg_gap_ms: deg_gap * 1000.0,
                 drift_ms,
                 drift_ratio,
@@ -415,6 +452,85 @@ pub fn detect_warpings(
         }
     }
 
+    events
+}
+
+/// 计算中位数（输入会被排序）
+fn median(values: &mut [f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len() % 2 == 0 {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    }
+}
+
+// ============================================================
+// 维度二补充：内容截断/裁剪检测 (Truncation)
+// ============================================================
+
+/// 内容截断检测参数
+#[derive(Debug, Clone, Copy)]
+pub struct TruncationThreshold {
+    /// 最短截断时长 (ms)：段实际长度比参考短超过此值才报截断
+    pub min_truncation_ms: f64,
+}
+
+impl Default for TruncationThreshold {
+    fn default() -> Self {
+        Self {
+            min_truncation_ms: 60.0, // 与中断检测 min_duration_ms 对齐
+        }
+    }
+}
+
+/// 维度二补充：内容截断/裁剪检测
+///
+/// 直接比对每段**实际音频长度**（不含末尾补零）与参考长度。
+/// 专门捕获"少量时域裁剪"这类三个维度都漏掉的异常：
+/// - 中断检测：因 valid_len 把补零区切掉，裁剪造成的"参考有声、录制静音（补零）"
+///   不进入检测循环（见 detect_dropouts 的 valid_len 逻辑）。
+/// - 频谱检测：裁剪通常只影响末尾 1 个 patch，被 exclude_edge_patches 排除。
+/// - 漂移检测：只看段间间距，对段内裁剪无感知。
+///
+/// 这里绕开上述过滤，直接看段长度差异，是最可靠的裁剪信号。
+///
+/// # Arguments
+/// * `seg_actual_samples` - 各段实际音频样本数（不含补零），已按段顺序
+/// * `ref_samples` - 参考音频总样本数
+/// * `sample_rate` - 采样率
+/// * `threshold` - 阈值
+pub fn detect_truncation(
+    seg_actual_samples: &[usize],
+    ref_samples: usize,
+    sample_rate: u32,
+    threshold: TruncationThreshold,
+) -> Vec<TruncationEvent> {
+    if ref_samples == 0 || sample_rate == 0 {
+        return vec![];
+    }
+    let ref_ms = ref_samples as f64 / sample_rate as f64 * 1000.0;
+
+    let mut events = Vec::new();
+    for (seg_idx, &actual) in seg_actual_samples.iter().enumerate() {
+        if actual >= ref_samples {
+            continue; // 段不短于参考，无截断
+        }
+        let deg_ms = actual as f64 / sample_rate as f64 * 1000.0;
+        let truncation_ms = ref_ms - deg_ms;
+        if truncation_ms >= threshold.min_truncation_ms {
+            events.push(TruncationEvent {
+                segment_index: seg_idx,
+                ref_duration_ms: ref_ms,
+                deg_duration_ms: deg_ms,
+                truncation_ms,
+            });
+        }
+    }
     events
 }
 
@@ -487,6 +603,7 @@ pub struct AnomalyDetectConfig {
     pub dropout_config: DropoutDetectorConfig,
     pub warping_threshold: WarpingThreshold,
     pub artifact_threshold: f64,
+    pub truncation_threshold: TruncationThreshold,
 }
 
 impl Default for AnomalyDetectConfig {
@@ -495,6 +612,7 @@ impl Default for AnomalyDetectConfig {
             dropout_config: DropoutDetectorConfig::default(),
             warping_threshold: WarpingThreshold::default(),
             artifact_threshold: 0.4,
+            truncation_threshold: TruncationThreshold::default(),
         }
     }
 }
@@ -506,7 +624,7 @@ pub fn detect_anomalies(
     degraded: &[f64],
     sample_rate: u32,
     alignment_offsets_s: &[f64],
-    ref_duration: f64,
+    _ref_duration: f64,
     patch_sims: &[Vec<crate::visqol::PatchSimilarityResult>],
     config: &AnomalyDetectConfig,
 ) -> AudioAnomalyReport {
@@ -514,20 +632,22 @@ pub fn detect_anomalies(
     let dropouts = detect_dropouts(reference, degraded, sample_rate, &config.dropout_config, 0);
     let dropout_duration_ms: f64 = dropouts.iter().map(|e| e.duration_ms).sum();
 
-    // 维度二：时轴漂移
-    // 时轴漂移检测：构建与 alignment_offsets 对应的参考段间距
-    let ref_gaps: Vec<f64> = std::iter::repeat(ref_duration)
-        .take(alignment_offsets_s.len().saturating_sub(1))
-        .collect();
-    let warpings = detect_warpings(alignment_offsets_s, &ref_gaps, config.warping_threshold);
+    // 维度二：时轴漂移（中位数基准，段数<4 自动跳过）
+    let warpings = detect_warpings(alignment_offsets_s, config.warping_threshold);
     let warping_duration_ms: f64 = warpings.iter().map(|w| w.drift_ms.abs()).sum();
 
     // 维度三：频谱损伤
     let (spectral_artifacts_score, spectral_artifacts) =
         detect_spectral_artifacts(patch_sims, config.artifact_threshold, true);
 
-    let has_anomaly =
-        !dropouts.is_empty() || !warpings.is_empty() || spectral_artifacts_score > 0.25;
+    // 维度二补充：内容截断（这里无法获得各段实际长度，留空，由调用方单独填充）
+    let truncations: Vec<TruncationEvent> = vec![];
+    let truncation_duration_ms: f64 = 0.0;
+
+    let has_anomaly = !dropouts.is_empty()
+        || !warpings.is_empty()
+        || !truncations.is_empty()
+        || spectral_artifacts_score > 0.25;
 
     AudioAnomalyReport {
         has_anomaly,
@@ -537,5 +657,7 @@ pub fn detect_anomalies(
         warping_duration_ms,
         spectral_artifacts_score,
         spectral_artifacts,
+        truncations,
+        truncation_duration_ms,
     }
 }

@@ -103,8 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 用于收集三维异常检测的数据
     let mut alignment_offsets: Vec<f64> = Vec::new();
-    let mut ref_segment_gaps: Vec<f64> = Vec::new(); // 参考音频段间距（用于时轴漂移检测）
     let mut all_patch_sims: Vec<Vec<visqol::PatchSimilarityResult>> = Vec::new();
+    // 各段实际音频样本数（不含末尾补零），用于内容截断检测
+    let mut seg_actual_samples: Vec<usize> = Vec::new();
 
     for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
@@ -112,10 +113,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // 收集对齐偏移（秒）
         alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
-        // 收集参考段间距（当前段开始到下一段开始的预期间距）
-        if seg_idx < num_segments - 1 {
-            ref_segment_gaps.push(ref_duration);
-        }
+        // 收集该段实际音频样本数（不含末尾补零），用于内容截断检测
+        seg_actual_samples.push(seg_end - seg_start);
 
         // 调试：打印分段提取的详细信息
         let seg_samples = &rec_audio.samples[seg_start..seg_end];
@@ -183,6 +182,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             warping_duration_ms: 0.0,
             spectral_artifacts_score: 0.0,
             spectral_artifacts: vec![],
+            truncations: vec![],
+            truncation_duration_ms: 0.0,
         };
 
         // 幅值统计
@@ -206,18 +207,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 维度二：时轴漂移检测（在所有分段完成后）
-    // 仅适用于循环播放（参考音频在录制中出现多次）场景。
-    // 单段（单次播放）无"段间"概念，直接跳过，不报漂移。
-    let warping_events = if num_segments >= 2 {
-        let warping_threshold = metrics::WarpingThreshold::default();
-        metrics::detect_warpings(
-            &alignment_offsets,
-            &ref_segment_gaps,
-            warping_threshold,
-        )
-    } else {
-        vec![]
-    };
+    // 采用段间间距的中位数做基准（对循环停顿不固定鲁棒），段数 < 4 时自动跳过。
+    let warping_events = metrics::detect_warpings(
+        &alignment_offsets,
+        metrics::WarpingThreshold::default(),
+    );
+
+    // 维度二补充：内容截断/裁剪检测
+    // 直接比对各段实际长度 vs 参考长度，绕过中断/频谱检测对裁剪的盲区。
+    let truncation_events = metrics::detect_truncation(
+        &seg_actual_samples,
+        ref_audio.samples.len(),
+        ref_audio.sample_rate,
+        metrics::TruncationThreshold::default(),
+    );
 
     // 维度三：频谱损伤检测
     let artifact_threshold = 0.4; // 相似度低于 0.4 判定为损伤（与 AnomalyDetectConfig 一致）
@@ -244,6 +247,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .cloned()
             .collect();
 
+        // 合并内容截断事件到对应段
+        let seg_truncations: Vec<metrics::TruncationEvent> = truncation_events.iter()
+            .filter(|t| t.segment_index == seg_idx)
+            .cloned()
+            .collect();
+        let seg_truncation_ms: f64 = seg_truncations.iter().map(|t| t.truncation_ms).sum();
+
         // 计算该段的频谱损伤比例（分母排除首尾 patch，与 detect_spectral_artifacts 一致）
         let seg_total_patch = all_patch_sims.get(seg_idx).map(|p| p.len()).unwrap_or(0);
         let seg_valid_patch = if seg_total_patch >= 4 { seg_total_patch - 2 } else { seg_total_patch };
@@ -258,12 +268,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // has_anomaly 的频谱门槛从 0.1 提到 0.25，避免少量低相似度 patch 就误标异常
         let has_anomaly = seg_result.anomaly.has_anomaly
             || !seg_warpings.is_empty()
+            || !seg_truncations.is_empty()
             || seg_spectral_score > 0.25;
 
         seg_result.anomaly.warpings = seg_warpings;
         seg_result.anomaly.warping_duration_ms = seg_warping_ms;
         seg_result.anomaly.spectral_artifacts_score = seg_spectral_score;
         seg_result.anomaly.spectral_artifacts = seg_artifacts;
+        seg_result.anomaly.truncations = seg_truncations;
+        seg_result.anomaly.truncation_duration_ms = seg_truncation_ms;
         seg_result.anomaly.has_anomaly = has_anomaly;
     }
     
