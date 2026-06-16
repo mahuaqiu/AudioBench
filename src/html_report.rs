@@ -203,14 +203,14 @@ var segColors = ['#3182ce','#e53e3e','#38a169','#d69e2e','#805ad5','#dd6b20','#3
 new Chart(document.getElementById('chartMos'),{{
   type:'line',
   data:{{labels:segLabels,datasets:[{{label:'MOS-LQO',data:mosValues,borderColor:'#3182ce',backgroundColor:'rgba(49,130,206,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}}}}}}
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:5,title:{{display:true,text:'MOS-LQO'}}}}}},plugins:{{title:{{display:true,text:'MOS-LQO分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
 }});
 
 // VNSIM 分段趋势
 new Chart(document.getElementById('chartVnsim'),{{
   type:'line',
   data:{{labels:segLabels,datasets:[{{label:'VNSIM',data:vnsimValues,borderColor:'#38a169',backgroundColor:'rgba(56,161,105,0.1)',fill:true,tension:0.3,pointRadius:5}}]}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}}}}}}
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'VNSIM分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
 }});
 
 // fVNSIM 频段相似度 - 动态生成bandLabels基于实际数据长度
@@ -218,17 +218,17 @@ var bandLabels = fvnsimData.length > 0 && fvnsimData[0].length > 0
   ? Array.from({{length:fvnsimData[0].length}},function(_,i){{return 'B'+(i+1);}})
   : Array.from({{length:32}},function(_,i){{return 'B'+(i+1);}});
 var fvnsimDatasets = fvnsimData.map(function(d,i){{
-  return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
+  return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],pointStyle:'circle',pointRadius:3,fill:false,tension:0.3}};
 }});
 new Chart(document.getElementById('chartFvnsim'),{{
   type:'line',
   data:{{labels:bandLabels,datasets:fvnsimDatasets}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}}}}}}
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}},legend:multiSegLegend(fvnsimData.length)}}}}
 }});
 
 // 频段能量比 - 使用与fVNSIM相同的动态bandLabels
 var energyDatasets = energyData.map(function(d,i){{
-  return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
+  return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],pointStyle:'circle',pointRadius:3,fill:false,tension:0.3}};
 }});
 var energyBandLabels = energyData.length > 0 && energyData[0].length > 0
   ? Array.from({{length:energyData[0].length}},function(_,i){{return 'B'+(i+1);}})
@@ -236,20 +236,71 @@ var energyBandLabels = energyData.length > 0 && energyData[0].length > 0
 new Chart(document.getElementById('chartEnergy'),{{
   type:'line',
   data:{{labels:energyBandLabels,datasets:energyDatasets}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}}}}}}
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}},legend:multiSegLegend(energyData.length)}}}}
 }});
 
 // Patch 时间片段相似度
 if(patchData.length > 0 && patchData[0].length > 0){{
   var allPatchLabels = patchData[0].map(function(_,i){{return 'Patch'+(i+1);}});
   var patchDatasets = patchData.map(function(d,i){{
-    return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],fill:false,tension:0.3}};
+    return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],pointStyle:'circle',pointRadius:3,fill:false,tension:0.3}};
   }});
   new Chart(document.getElementById('chartPatch'),{{
     type:'line',
     data:{{labels:allPatchLabels,datasets:patchDatasets}},
-    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}}}}}}
+    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'Patch时间片段相似度'}},legend:multiSegLegend(patchData.length)}}}}
   }});
+}}
+
+// 多段图例配置：段数<=8正常显示，>8自动折叠
+function multiSegLegend(segCount) {{
+  if (segCount <= 8) {{
+    return {{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8,padding:12}}}};
+  }}
+  return {{
+    position:'bottom',
+    labels:{{
+      usePointStyle:true,
+      pointStyle:'circle',
+      boxWidth:8,
+      padding:8,
+      font:{{size:11}},
+      generateLabels:function(chart){{
+        var data = chart.data;
+        if(!data.datasets.length) return [];
+        var shown = [];
+        data.datasets.forEach(function(ds,i){{
+          shown.push({{
+            text:ds.label,
+            fillStyle:ds.borderColor,
+            strokeStyle:ds.borderColor,
+            lineWidth:2,
+            pointStyle:'circle',
+            hidden:!chart.isDatasetVisible(i),
+            datasetIndex:i
+          }});
+        }});
+        // 段数过多时只显示前4个+省略+最后1个
+        if(shown.length > 12){{
+          var compact = shown.slice(0,4);
+          compact.push({{text:'...共'+shown.length+'段',fillStyle:'transparent',strokeStyle:'transparent',lineWidth:0,pointStyle:'circle',hidden:true,datasetIndex:-1}});
+          compact.push(shown[shown.length-1]);
+          return compact;
+        }}
+        return shown;
+      }}
+    }},
+    onClick:function(e,item,legend){{
+      var index = item.datasetIndex;
+      if(index<0) return;
+      var ci = legend.chart;
+      if(ci.isDatasetVisible(index)){{
+        ci.hide(index);
+      }} else {{
+        ci.show(index);
+      }}
+    }}
+  }};
 }}
 
 // X轴优化：当标签过多时自动跳显
