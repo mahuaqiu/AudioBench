@@ -205,6 +205,10 @@ pub fn evaluate_with_visqol(
 
     // 尝试从JSON获取patch信息（可选，失败不影响主流程）
     result.patch_sims = parse_patch_from_json(&temp_json, result.fvnsim.len());
+    // 尝试从JSON获取centerFreqBands（可选）
+    if result.center_freq_bands.is_empty() {
+        result.center_freq_bands = parse_center_freq_bands(&temp_json);
+    }
 
     // 清理临时文件
     let _ = fs::remove_file(&temp_csv);
@@ -374,4 +378,35 @@ fn parse_patch_from_json(json_path: &Path, _num_bands: usize) -> Vec<PatchSimila
 
     println!("[*] patch 时间片段解析完成");
     results
+}
+
+/// 从 ViSQOL debug JSON 解析 centerFreqBands（各频带中心频率）
+fn parse_center_freq_bands(json_path: &Path) -> Vec<f64> {
+    let content = match fs::read_to_string(json_path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(j) => j,
+        Err(_) => return vec![],
+    };
+
+    // ViSQOL protobuf JSON 使用 camelCase: centerFreqBands
+    let bands = json.get("centerFreqBands")
+        .or_else(|| json.get("center_freq_bands"))
+        .and_then(|v| v.as_array());
+
+    match bands {
+        Some(arr) => {
+            let freqs: Vec<f64> = arr.iter()
+                .filter_map(|v| v.as_f64())
+                .collect();
+            if !freqs.is_empty() {
+                println!("[*] 解析到 {} 个中心频率", freqs.len());
+            }
+            freqs
+        }
+        None => vec![],
+    }
 }

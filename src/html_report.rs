@@ -42,6 +42,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     let fvnsim_json = serde_json::to_string(&fvnsim_data).unwrap_or("[]".to_string());
     let energy_json = serde_json::to_string(&energy_data).unwrap_or("[]".to_string());
     let patch_json = serde_json::to_string(&patch_data).unwrap_or("[]".to_string());
+    // centerFreqBands - 各频带中心频率（用于 tooltip 显示）
+    let center_freq_bands: Vec<f64> = report.segments.first()
+        .map(|s| s.quality.center_freq_bands.clone())
+        .unwrap_or_default();
+    let center_freq_json = serde_json::to_string(&center_freq_bands).unwrap_or("[]".to_string());
 
     // 卡顿统计
     let dropout_count: usize = report.segments.iter().map(|s| s.dropouts.count).sum();
@@ -196,6 +201,7 @@ var vnsimValues = JSON.parse({vnsim_values_json});
 var fvnsimData = JSON.parse({fvnsim_json});
 var energyData = JSON.parse({energy_json});
 var patchData = JSON.parse({patch_json});
+var centerFreqBands = JSON.parse({center_freq_json});
 
 var segColors = ['#3182ce','#e53e3e','#38a169','#d69e2e','#805ad5','#dd6b20','#319795','#b83280'];
 
@@ -217,13 +223,21 @@ new Chart(document.getElementById('chartVnsim'),{{
 var bandLabels = fvnsimData.length > 0 && fvnsimData[0].length > 0 
   ? Array.from({{length:fvnsimData[0].length}},function(_,i){{return 'B'+(i+1);}})
   : Array.from({{length:32}},function(_,i){{return 'B'+(i+1);}});
+// 生成频带tooltip标签（带中心频率）
+function bandTooltipLabel(label, dataIndex) {{
+  if (centerFreqBands.length > dataIndex) {{
+    var freq = centerFreqBands[dataIndex];
+    return label + ' (' + (freq >= 1000 ? (freq/1000).toFixed(1)+'kHz' : freq.toFixed(0)+'Hz') + ')';
+  }}
+  return label;
+}}
 var fvnsimDatasets = fvnsimData.map(function(d,i){{
   return {{label:'第'+(i+1)+'段',data:d,borderColor:segColors[i%segColors.length],pointStyle:'circle',pointRadius:3,fill:false,tension:0.3}};
 }});
 new Chart(document.getElementById('chartFvnsim'),{{
   type:'line',
   data:{{labels:bandLabels,datasets:fvnsimDatasets}},
-  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}},legend:multiSegLegend(fvnsimData.length)}}}}
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:0,max:1,title:{{display:true,text:'相似度'}}}}}},plugins:{{title:{{display:true,text:'fVNSIM频段相似度（多段对比）'}},legend:multiSegLegend(fvnsimData.length),tooltip:{{callbacks:{{title:function(items){{return bandTooltipLabel(items[0].label,items[0].dataIndex);}}}}}}}}}}
 }});
 
 // 频段能量比 - 使用与fVNSIM相同的动态bandLabels
@@ -237,6 +251,7 @@ new Chart(document.getElementById('chartEnergy'),{{
   type:'line',
   data:{{labels:energyBandLabels,datasets:energyDatasets}},
   options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}},legend:multiSegLegend(energyData.length)}}}}
+  options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{title:{{display:true,text:'能量比'}}}}}},plugins:{{title:{{display:true,text:'频段能量比（多段对比）'}},legend:multiSegLegend(energyData.length),tooltip:{{callbacks:{{title:function(items){{return bandTooltipLabel(items[0].label,items[0].dataIndex);}}}}}}}}}}
 }});
 
 // Patch 时间片段相似度
@@ -415,6 +430,7 @@ function multiSegLegend(segCount) {{
         fvnsim_json = to_js_str(&fvnsim_json),
         energy_json = to_js_str(&energy_json),
         patch_json = to_js_str(&patch_json),
+        center_freq_json = to_js_str(&center_freq_json),
         table_rows = table_rows,
     )
 }
