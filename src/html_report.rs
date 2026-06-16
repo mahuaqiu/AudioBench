@@ -90,6 +90,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
   th,td{{text-align:left;padding:8px 12px;border-bottom:1px solid var(--border)}}
   th{{font-weight:600;color:var(--text2);background:#f7fafc}}
   tr:hover td{{background:#f7fafc}}
+  .pagination {{ margin-top:16px; text-align:center }}
+  .pagination button {{ margin:0 4px; padding:6px 12px; border:1px solid var(--border); background:var(--card); cursor:pointer; border-radius:4px }}
+  .pagination button:hover {{ background:#e2e8f0 }}
+  .pagination button.active {{ background:var(--accent); color:#fff; border-color:var(--accent) }}
+  .pagination button:disabled {{ opacity:0.5; cursor:not-allowed }}
   .info-grid{{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;font-size:13px}}
   .info-grid .label{{color:var(--text3)}}.info-grid .value{{color:var(--text);font-weight:500}}
   .glossary{{font-size:13px}}
@@ -136,9 +141,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 
 <div class="section"><div class="section-title">各段详细评分</div>
-<table><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>卡顿</th></tr></thead>
+<table id="segmentsTable"><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>卡顿</th></tr></thead>
 <tbody>{table_rows}</tbody>
 </table>
+<div class="pagination" id="tablePagination"></div>
 </div>
 
 <div class="section"><div class="section-title">MOS-LQO 分段趋势</div>
@@ -267,6 +273,69 @@ if(patchData.length > 0 && patchData[0].length > 0){{
       chart.update('none');
     }}
   }});
+}})();
+
+// 表格分页
+(function() {{
+  var table = document.getElementById('segmentsTable');
+  if (!table) return;
+  var tbody = table.querySelector('tbody');
+  var rows = Array.from(tbody.querySelectorAll('tr'));
+  if (rows.length <= 20) return;
+  
+  var pageSize = 20;
+  var currentPage = 1;
+  var totalPages = Math.ceil(rows.length / pageSize);
+  
+  function showPage(page) {{
+    currentPage = page;
+    rows.forEach(function(row, index) {{
+      var start = (page - 1) * pageSize;
+      var end = start + pageSize;
+      row.style.display = (index >= start && index < end) ? '' : 'none';
+    }});
+    updateButtons();
+  }}
+  
+  function updateButtons() {{
+    var pagination = document.getElementById('tablePagination');
+    pagination.innerHTML = '';
+    
+    var prevBtn = document.createElement('button');
+    prevBtn.textContent = '上一页';
+    prevBtn.disabled = currentPage === 1;
+    prevBtn.onclick = function() {{ showPage(currentPage - 1); }};
+    pagination.appendChild(prevBtn);
+    
+    for (var i = 1; i <= totalPages; i++) {{
+      if (i === 1 || i === totalPages || (i >= currentPage - 1 && i <= currentPage + 1)) {{
+        var btn = document.createElement('button');
+        btn.textContent = i;
+        btn.className = (i === currentPage) ? 'active' : '';
+        btn.onclick = function() {{ showPage(parseInt(this.textContent)); }};
+        pagination.appendChild(btn);
+      }} else if (i === currentPage - 2 || i === currentPage + 2) {{
+        var span = document.createElement('span');
+        span.textContent = '...';
+        span.style.padding = '0 4px';
+        pagination.appendChild(span);
+      }}
+    }}
+    
+    var nextBtn = document.createElement('button');
+    nextBtn.textContent = '下一页';
+    nextBtn.disabled = currentPage === totalPages;
+    nextBtn.onclick = function() {{ showPage(currentPage + 1); }};
+    pagination.appendChild(nextBtn);
+    
+    var info = document.createElement('span');
+    info.textContent = ' 共 ' + rows.length + ' 条，' + totalPages + ' 页';
+    info.style.marginLeft = '12px';
+    info.style.color = 'var(--text3)';
+    pagination.appendChild(info);
+  }}
+  
+  showPage(1);
 }})();
 </script>
 </body>
