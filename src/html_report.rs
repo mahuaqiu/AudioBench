@@ -48,10 +48,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
         .unwrap_or_default();
     let center_freq_json = serde_json::to_string(&center_freq_bands).unwrap_or("[]".to_string());
 
-    // 异常检测统计
-    let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms).sum();
-    let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms).sum();
-    let total_truncation: f64 = report.segments.iter().map(|s| s.anomaly.truncation_duration_ms).sum();
+   // 异常检测统计
+   let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms.abs()).sum();
+   let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms.abs()).sum();
+   let total_truncation: f64 = report.segments.iter().map(|s| s.anomaly.truncation_duration_ms.abs()).sum();
     let avg_spectral: f64 = if report.segments.is_empty() { 0.0 } else { report.segments.iter().map(|s| s.anomaly.spectral_artifacts_score).sum::<f64>() / report.segments.len() as f64 };
 
     // 模式名称
@@ -531,17 +531,17 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         let warping_ms = seg.anomaly.warping_duration_ms;
         let truncation_ms = seg.anomaly.truncation_duration_ms;
         let spectral = seg.anomaly.spectral_artifacts_score;
-        let anomaly_str = if seg.anomaly.has_anomaly {
-            let mut parts = vec![];
-            if dropout_ms > 0.0 {
-                parts.push(format!("中断{:.0}ms", dropout_ms));
-            }
-            if warping_ms > 0.0 {
-                parts.push(format!("漂移{:.0}ms", warping_ms));
-            }
-            if truncation_ms > 0.0 {
-                parts.push(format!("截断{:.0}ms", truncation_ms));
-            }
+       let anomaly_str = if seg.anomaly.has_anomaly {
+           let mut parts = vec![];
+           if dropout_ms > 0.0 {
+               parts.push(format!("中断{:.0}ms", dropout_ms.abs()));
+           }
+           if warping_ms.abs() > 0.0 {
+               parts.push(format!("漂移{:.0}ms", warping_ms.abs()));
+           }
+           if truncation_ms.abs() > 0.0 {
+               parts.push(format!("截断{:.0}ms", truncation_ms.abs()));
+           }
             if spectral > 0.25 {
                 parts.push(format!("损伤{:.0}%", spectral * 100.0));
             }

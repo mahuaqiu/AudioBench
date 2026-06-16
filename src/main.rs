@@ -154,18 +154,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
         let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
 
-        // 收集对齐偏移（秒）
-        alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
-        // 查找该段实际音频末尾（能量从非零到接近零的转变点）
-        let seg_actual_end = find_actual_audio_end(
-            &rec_audio.samples[seg_start..seg_end.min(rec_audio.samples.len())],
-            ref_audio.sample_rate,
-        );
-        // 实际样本数 = 实际末尾位置 - 起始位置
-        seg_actual_samples.push(seg_actual_end);
-        // 收集该段实际时长（秒），用于漂移检测
-        let seg_actual_dur_s = (seg_end - seg_start) as f64 / ref_audio.sample_rate as f64;
-        seg_durations_s.push(seg_actual_dur_s);
+       // 收集对齐偏移（秒）
+       alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
+       // 先提取段数据并补零到参考长度
+       let mut seg_degraded = rec_audio.samples[seg_start..seg_end].to_vec();
+       let _seg_raw_samples = seg_degraded.len(); // 补零前的实际样本数
+       seg_degraded.resize(ref_audio.samples.len(), 0.0);
+
+       // 检测补零后的实际音频末尾（用于截断和漂移检测）
+       // 补零区在 seg_degraded 末尾，find_actual_audio_end 可以精确定位补零起点
+       let seg_actual_end = find_actual_audio_end(&seg_degraded, ref_audio.sample_rate);
+       seg_actual_samples.push(seg_actual_end);
+       // 实际音频时长（秒），用于漂移检测
+       let seg_actual_dur_s = seg_actual_end as f64 / ref_audio.sample_rate as f64;
+       seg_durations_s.push(seg_actual_dur_s);
 
         // 调试：打印分段提取的详细信息
         let seg_samples = &rec_audio.samples[seg_start..seg_end];
@@ -174,15 +176,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_max = seg_samples.iter().cloned().fold(f64::NEG_INFINITY, |a, b| a.max(b));
         let seg_min = seg_samples.iter().cloned().fold(f64::INFINITY, |a, b| a.min(b));
         
-        println!("[DEBUG] 第{}段提取: 样本数={}, 偏移={}, RMS={:.6}, 峰值={:.6}, 最大={:.6}, 最小={:.6}", 
-                 seg_idx+1, seg_samples.len(), seg_start, seg_rms, seg_peak, seg_max, seg_min);
+       println!("[DEBUG] 第{}段提取: 样本数={}, 偏移={}, RMS={:.6}, 峰值={:.6}, 最大={:.6}, 最小={:.6}", 
+                seg_idx+1, seg_samples.len(), seg_start, seg_rms, seg_peak, seg_max, seg_min);
 
-        let mut seg_degraded = rec_audio.samples[seg_start..seg_end].to_vec();
-        // 不足参考长度的末尾补零
-        seg_degraded.resize(ref_audio.samples.len(), 0.0);
-
-        let seg_start_time = seg_start as f64 / ref_audio.sample_rate as f64;
-        let seg_end_time = seg_end as f64 / ref_audio.sample_rate as f64;
+       let seg_start_time = seg_start as f64 / ref_audio.sample_rate as f64;
+       let seg_end_time = seg_end as f64 / ref_audio.sample_rate as f64;
 
         println!(
             "[*] 评估第 {}/{} 段 ({:.2}s - {:.2}s, 置信度 {:.1}%)...",
