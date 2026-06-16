@@ -293,11 +293,19 @@ fn parse_csv_results(csv_path: &Path) -> Result<VisqolResult, String> {
     })
 }
 
+
 /// 从JSON调试文件解析patch信息
-/// ViSQOL protobuf 序列化的 JSON 结构:
-/// [similarity, freq_band_means[], ref_start_time, ref_end_time, deg_start_time, deg_end_time]
-/// 频段数量 = fvnsim.len()
-fn parse_patch_from_json(json_path: &Path, num_bands: usize) -> Vec<PatchSimilarityResult> {
+/// ViSQOL 使用 protobuf 的 MessageToJsonString 输出 JSON，
+/// 字段名采用 camelCase 格式，每个 patch 是结构化对象：
+/// {
+///   "similarity": 0.95,
+///   "freqBandMeans": [0.9, 0.8, ...],
+///   "refPatchStartTime": 0.3,
+///   "refPatchEndTime": 0.9,
+///   "degPatchStartTime": 0.3,
+///   "degPatchEndTime": 0.9
+/// }
+fn parse_patch_from_json(json_path: &Path, _num_bands: usize) -> Vec<PatchSimilarityResult> {
     let content = match fs::read_to_string(json_path) {
         Ok(c) => c,
         Err(e) => {
@@ -306,63 +314,76 @@ fn parse_patch_from_json(json_path: &Path, num_bands: usize) -> Vec<PatchSimilar
         }
     };
 
-    println!("[DEBUG] ViSQOL JSON 内容长度: {} bytes, 频段数: {}", content.len(), num_bands);
+    println!("[DEBUG] ViSQOL JSON 内容长度: {} bytes", content.len());
     
-    // 解析JSON，尝试多个可能的字段名
-    let field_names = ["patchSims", "patch_sims", "patch_similarities", "nsims", "similarities"];
-    
-    for field_name in field_names {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(patches) = json.get(field_name).and_then(|p| p.as_array()) {
-                println!("[DEBUG] 找到字段 '{}', patch数量: {}", field_name, patches.len());
-                let mut results = Vec::new();
-                for patch in patches {
-                    if let Some(arr) = patch.as_array() {
-                        // 数组结构: [similarity, freq_band_means[0~N-1], ref_start, ref_end, deg_start, deg_end]
-                        // 索引: 0=similarity, 1~N=freq_band_means, N+1=ref_start, N+2=ref_end, N+3=deg_start, N+4=deg_end
-                        let idx_ref_start = 1 + num_bands;
-                        let idx_ref_end = idx_ref_start + 1;
-                        let idx_deg_start = idx_ref_end + 1;
-                        let idx_deg_end = idx_deg_start + 1;
-                        
-                        if arr.len() > idx_deg_end {
-                            results.push(PatchSimilarityResult {
-                                similarity: arr[0].as_f64().unwrap_or(0.0),
-                                ref_patch_start_time: arr[idx_ref_start].as_f64().unwrap_or(0.0),
-                                ref_patch_end_time: arr[idx_ref_end].as_f64().unwrap_or(0.0),
-                                deg_patch_start_time: arr[idx_deg_start].as_f64().unwrap_or(0.0),
-                                deg_patch_end_time: arr[idx_deg_end].as_f64().unwrap_or(0.0),
-                            });
-                        } else {
-                            // 尝试用固定��移 32（常见频段数）
-                            let fixed_offset = 1 + 32;
-                            if arr.len() > fixed_offset + 4 {
-                                println!("[DEBUG] 使用固定偏移 {}, 数组长度: {}", fixed_offset, arr.len());
-                                results.push(PatchSimilarityResult {
-                                    similarity: arr[0].as_f64().unwrap_or(0.0),
-                                    ref_patch_start_time: arr[fixed_offset].as_f64().unwrap_or(0.0),
-                                    ref_patch_end_time: arr[fixed_offset + 1].as_f64().unwrap_or(0.0),
-                                    deg_patch_start_time: arr[fixed_offset + 2].as_f64().unwrap_or(0.0),
-                                    deg_patch_end_time: arr[fixed_offset + 3].as_f64().unwrap_or(0.0),
-                                });
-                            }
-                        }
-                    }
-                }
-                if !results.is_empty() {
-                    println!("[DEBUG] 成功解析 {} 个 patch", results.len());
-                    return results;
-                }
-            }
+    // 解析JSON，ViSQOL protobuf JSON 使用 camelCase 字段名
+    let json: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(j) => j,
+        Err(e) => {
+            println!("[DEBUG] JSON 解析失败: {}", e);
+            return vec![];
         }
-        
-        // 打印所有顶层键用于调试
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(obj) = json.as_object() {
-                println!("[DEBUG] JSON顶层键: {:?}", obj.keys().collect::<Vec<_>>());
-            }
+    };
+
+    // 打印顶层键用于调试
+    if let Some(obj) = json.as_object() {
+        println!("[DEBUG] JSON顶层键: {:?}", obj.keys().collect::<Vec<_>>());
+    }
+    
+    // 查找 patchSims 字段（protobuf JSON camelCase 命名）
+    let patches = json.get("patchSims")
+        .or_else(|| json.get("patch_sims"))
+        .and_then(|p| p.as_array());
+    
+    let patches = match patches {
+        Some(p) => p,
+        None => {
+            println!("[DEBUG] 未找到 patchSims 字段");
+            return vec![];
+        }
+    };
+
+    println!("[DEBUG] 找到 patchSims, patch数量: {}", patches.len());
+    let mut results = Vec::new();
+
+    for patch in patches {
+        // 每个 patch 是一个结构化对象，不是数组
+        if let Some(obj) = patch.as_object() {
+            let similarity = obj.get("similarity")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let ref_start = obj.get("refPatchStartTime")
+                .or_else(|| obj.get("ref_patch_start_time"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let ref_end = obj.get("refPatchEndTime")
+                .or_else(|| obj.get("ref_patch_end_time"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let deg_start = obj.get("degPatchStartTime")
+                .or_else(|| obj.get("deg_patch_start_time"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let deg_end = obj.get("degPatchEndTime")
+                .or_else(|| obj.get("deg_patch_end_time"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+
+            println!("[DEBUG]   patch: similarity={:.4}, ref=[{:.2}-{:.2}], deg=[{:.2}-{:.2}]",
+                similarity, ref_start, ref_end, deg_start, deg_end);
+
+            results.push(PatchSimilarityResult {
+                similarity,
+                ref_patch_start_time: ref_start,
+                ref_patch_end_time: ref_end,
+                deg_patch_start_time: deg_start,
+                deg_patch_end_time: deg_end,
+            });
+        } else {
+            println!("[DEBUG]   patch 不是对象: {:?}", patch);
         }
     }
 
-    vec![]
+    println!("[DEBUG] 成功解析 {} 个 patch", results.len());
+    results
 }
