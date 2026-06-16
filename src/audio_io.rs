@@ -1,7 +1,7 @@
 //! 音频加载与预处理模块
 //! 负责 WAV 解码、重采样（线性插值）、单声道化
 
-use hound::{WavReader, SampleFormat};
+use hound::{WavReader, SampleFormat, WavWriter, WavSpec};
 use std::path::Path;
 
 /// 简单的线性插值重采样
@@ -108,23 +108,22 @@ impl AudioData {
     }
 }
 
-/// 写入单声道 WAV 文件（供 visqol 调用）
-/// 使用 32-bit float 格式以最大程度保留量化精度
+/// 写入单声道 16-bit PCM WAV 文件（供 visqol 调用）
+/// ViSQOL 只支持 16-bit PCM
 pub fn write_wav_mono(path: &std::path::Path, samples: &[f64], sample_rate: u32) -> Result<(), String> {
-    use hound::{WavWriter, WavSpec, SampleFormat};
-    
     let spec = WavSpec {
         channels: 1,
         sample_rate,
-        bits_per_sample: 32,
-        sample_format: SampleFormat::Float,
+        bits_per_sample: 16,
+        sample_format: SampleFormat::Int,
     };
     
     let mut writer = WavWriter::create(path, spec)
         .map_err(|e| format!("创建 WAV 文件失败: {}", e))?;
     
+    let max_val = 32767.0;
     for &sample in samples {
-        let s = sample as f32;
+        let s = (sample * max_val).clamp(-32768.0, 32767.0) as i32;
         writer.write_sample(s)
             .map_err(|e| format!("写入采样失败: {}", e))?;
     }
