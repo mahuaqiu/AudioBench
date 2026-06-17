@@ -184,7 +184,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 <div class="card">
 <div class="card-label">频谱损伤</div>
-<div class="card-value {anomaly_class}">{spectral_score_pct}</div>
+<div class="card-value {anomaly_class}">{spectral_score_pct}%</div>
 <div class="card-hint">低相似度片段比例</div>
 </div>
 </div>
