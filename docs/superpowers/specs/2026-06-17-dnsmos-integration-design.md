@@ -83,17 +83,11 @@ bin/
 
 ### 3.2 多项式校准系数（来自 Python 源码，非个性化版本）
 
-```rust
-/// DNSMOS 多项式校准系数（非个性化模型）
-const POLY_SIG: (f64, f64, f64) = (-0.08397278, 1.22083953, 0.0052439);
-const POLY_BAK: (f64, f64, f64) = (-0.13166888, 1.60915514, -0.39604546);
-const POLY_OVRL: (f64, f64, f64) = (-0.06766283, 1.11546468, 0.04602535);
+- **SIG**: `a = -0.08397278, b = 1.22083953, c = 0.0052439`
+- **BAK**: `a = -0.13166888, b = 1.60915514, c = -0.39604546`
+- **OVRL**: `a = -0.06766283, b = 1.11546468, c = 0.04602535`
 
-/// 多项式计算: a*x² + b*x + c
-fn polyfit(x: f64, (a, b, c): (f64, f64, f64)) -> f64 {
-    a * x * x + b * x + c
-}
-```
+公式：`result = a * x² + b * x + c`
 
 ### 3.3 公开 API
 
@@ -187,7 +181,8 @@ let dnsmos_evaluator = DnsMosEvaluator::new(DNSMOS_MODEL)
 ```
 
 - DNSMOS 不需要临时 WAV 文件，直接接收采样数据（比 ViSQOL 更简洁）
-- 每段评估后调用 `dnsmos_evaluator.evaluate(&segment_samples_16khz)`
+- 每段评估后调用 `dnsmos_evaluator.evaluate(&segment_samples, segment_sample_rate)`
+  - 传入原始采样数据和原始采样率，内部自动重采样到 16kHz
 
 ### 4.2 report.rs 修改
 
@@ -222,7 +217,7 @@ pub struct OverallStats {
     pub moslqo_stddev: f64,
     pub vnsim_mean: f64,
 
-    // 新增 DNSMOS 统计（仅计算成功评估的段）
+    // 新增 DNSMOS 统计（仅提供均值，因 SIG/BAK/OVRL 跨维度比较无意义）
     pub sig_mean: Option<f64>,
     pub bak_mean: Option<f64>,
     pub ovrl_mean: Option<f64>,
