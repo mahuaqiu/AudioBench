@@ -81,9 +81,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     let mos_is_low = report.overall.moslqo_mean < 3.0;
     let mos_class = if mos_is_low { "bad" } else { "good" };
 
-    // 是否存在任何异常
-    let has_any_anomaly = total_dropout > 0.0 || total_warping > 0.0 || avg_spectral > 0.25;
-    let anomaly_class = if has_any_anomaly { "bad" } else { "" };
+    // 各异常类型独立判断颜色
+    let dropout_class = if total_dropout > 0.0 { "bad" } else { "" };
+    let warping_class = if total_warping > 0.0 { "bad" } else { "" };
+    let spectral_class = if avg_spectral > 0.25 { "bad" } else { "" };
 
     // 模式名称
     let mode_name = if report.config.target_sample_rate == 16000 { "语音模式" } else { "音频模式" };
@@ -173,18 +174,18 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 <div class="card">
 <div class="card-label">时域中断</div>
-<div class="card-value {anomaly_class}">{dropout_dur:.0}ms</div>
+<div class="card-value {dropout_class}">{dropout_dur:.0}ms</div>
 <div class="card-hint">网络丢包/静音（能量断崖下跌）</div>
 </div>
 <div class="card">
 <div class="card-label">时轴漂移</div>
-<div class="card-value {anomaly_class}">{warping_dur:.0}ms</div>
+<div class="card-value {warping_class}">{warping_dur:.0}ms</div>
 <div class="card-hint">{warping_types_str}</div>
 </div>
 </div>
 <div class="card">
 <div class="card-label">频谱损伤</div>
-<div class="card-value {anomaly_class}">{spectral_score_pct}%</div>
+<div class="card-value {spectral_class}">{spectral_score_pct}%</div>
 <div class="card-hint">低相似度片段比例</div>
 </div>
 </div>
@@ -487,7 +488,9 @@ function multiSegLegend(segCount) {{
         mos_min = report.overall.moslqo_min,
         mos_max = report.overall.moslqo_max,
         mos_class = mos_class,
-        anomaly_class = anomaly_class,
+        dropout_class = dropout_class,
+        warping_class = warping_class,
+        spectral_class = spectral_class,
         vnsim_mean = report.overall.vnsim_mean,
         dropout_dur = total_dropout,
         warping_dur = total_warping,
