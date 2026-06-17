@@ -155,7 +155,6 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div><span class="label">参考时长：</span><span class="value">{ref_dur:.2}s</span></div>
 <div><span class="label">录制时长：</span><span class="value">{deg_dur:.2}s</span></div>
 <div><span class="label">采样率：</span><span class="value">{sample_rate}Hz（{mode}）</span></div>
-<div><span class="label">对齐延迟：</span><span class="value">{delay_ms:.1}ms</span></div>
 <div><span class="label">对齐置信度：</span><span class="value">{conf:.1}%</span></div>
 <div><span class="label">分段数量：</span><span class="value">{seg_count}</span></div>
 </div>
@@ -481,7 +480,6 @@ function multiSegLegend(segCount) {{
         deg_dur = report.recorded_duration_s,
         sample_rate = report.config.target_sample_rate,
         mode = mode_name,
-        delay_ms = report.alignment.delay_ms,
         conf = report.alignment.confidence * 100.0,
         seg_count = report.segments.len(),
         mos_mean = report.overall.moslqo_mean,
