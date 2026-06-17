@@ -261,6 +261,15 @@ impl DnsMosEvaluator {
 // Mac/Linux 空实现（仅满足类型定义）
 // ============================================================================
 
+/// DNSMOS 评估结果 - Mac 空实现
+#[cfg(not(target_os = "windows"))]
+#[derive(Debug, Clone)]
+pub struct DnsMosResult {
+    pub sig: f64,
+    pub bak: f64,
+    pub ovrl: f64,
+}
+
 #[cfg(not(target_os = "windows"))]
 pub struct DnsMosEvaluator;
 

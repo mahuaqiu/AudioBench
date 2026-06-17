@@ -216,17 +216,17 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-hint">低相似度片段比例</div>
 </div>
 <div class="card">
-<div class="card-label">DNSMOS-SIG</div>
+<div class="card-label">DNSMOS-SIG (Signal MOS)</div>
 <div class="card-value {sig_class}">{sig_mean:.2}</div>
 <div class="card-hint">人声信号分（1-5），值越高越好</div>
 </div>
 <div class="card">
-<div class="card-label">DNSMOS-BAK</div>
+<div class="card-label">DNSMOS-BAK (Background MOS)</div>
 <div class="card-value {bak_class}">{bak_mean:.2}</div>
 <div class="card-hint">背景噪声分（1-5），值越高越好</div>
 </div>
 <div class="card">
-<div class="card-label">DNSMOS-OVRL</div>
+<div class="card-label">DNSMOS-OVRL (Overall MOS)</div>
 <div class="card-value {ovrl_class}">{ovrl_mean:.2}</div>
 <div class="card-hint">整体综合分（1-5），值越高越好</div>
 </div>
@@ -298,12 +298,12 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dd>检测同一段音频内容在录制端的时长偏差，反映网络抖动导致的音频拉长/压缩。</dd>
 <dt><span class="tag">频谱损伤</span>机械音</dt>
 <dd>检测时域能量正常但频域结构被破坏的片段（PLC 伪造音、编解码杂音等）。</dd>
-<dt><span class="tag">SIG</span>人声信号分</dt>
-<dd>DNSMOS 的人声信号质量评分，符合 ITU-T P.835 标准。评估人声是否清晰、自然。如果降噪算法用力过猛导致发言人声音变小或变哑，这个分数就会很低。值域 1.0-5.0，分数越高越好。</dd>
-<dt><span class="tag">BAK</span>背景噪声分</dt>
-<dd>DNSMOS 的背景噪声质量评分，符合 ITU-T P.835 标准。评估背景杂音的消除程度。如果会议室里键盘敲击声、空调风噪被去得很干净，这个分数就会很高。值域 1.0-5.0，分数越高越好。</dd>
-<dt><span class="tag">OVRL</span>整体综合分</dt>
-<dd>DNSMOS 的整体质量评分，符合 ITU-T P.835 标准。结合人声和噪声后的整体听感主��评分。值域 1.0-5.0，分数越高越好。</dd>
+<dt><span class="tag">DNSMOS-SIG</span> Signal MOS (人声信号分)</dt>
+<dd>符合 ITU-T P.835 标准。评估人声是否清晰、自然——降噪过度导致声音变小或变哑则分数低。分数越高越好（1.0-5.0）。</dd>
+<dt><span class="tag">DNSMOS-BAK</span> Background MOS (背景噪声分)</dt>
+<dd>符合 ITU-T P.835 标准。评估背景杂音消除程度——键盘声、空调风噪被去除越干净分数越高。分数越高越好（1.0-5.0）。</dd>
+<dt><span class="tag">DNSMOS-OVRL</span> Overall MOS (整体综合分)</dt>
+<dd>符合 ITU-T P.835 标准。结合人声和噪声的整体听感主观评分。分数越高越好（1.0-5.0）。</dd>
 </dl>
 </div>
 
