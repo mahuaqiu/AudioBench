@@ -425,8 +425,8 @@ var waveformDeg = JSON.parse({waveform_deg_json});
   }}
   
   // 渲染两个波形
-  renderWaveform('waveformRef', 'waveformRefContainer', waveformRef, '#3182ce');
-  renderWaveform('waveformDeg', 'waveformDegContainer', waveformDeg, '#e53e3e');
+  renderWaveform('waveformRef', 'waveformRefContainer', waveformRef, '#1a202c');
+  renderWaveform('waveformDeg', 'waveformDegContainer', waveformDeg, '#3182ce');
 }})();
 
 
