@@ -585,11 +585,11 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         };
 
         // 颜色类：MOS < 3 用红色，异常用红色
-        let mos_class = if seg.quality.moslqo < 3.0 { "class=\"bad\"" } else { "" };
-        let anomaly_class = if seg.anomaly.has_anomaly { "class=\"bad\"" } else { "" };
+        let mos_color = if seg.quality.moslqo < 3.0 { "color:#e53e3e;font-weight:bold;" } else { "" };
+        let anomaly_color = if seg.anomaly.has_anomaly { "color:#e53e3e;font-weight:bold;" } else { "" };
 
-        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td {}>{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td {}>{}</td></tr>",
-            i+1, seg.start_time_s, seg.end_time_s, mos_class, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, anomaly_class, anomaly_str)
+        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td style=\"{}\">{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td style=\"{}\">{}</td></tr>",
+            i+1, seg.start_time_s, seg.end_time_s, mos_color, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, anomaly_color, anomaly_str)
     }).collect()
 }
 
