@@ -72,7 +72,6 @@ fn main() {
     let dnsmos_model_hash = format!("{:016x}", dnsmos_model_data.len());
     println!("cargo:rustc-env=DNSMOS_MODEL_HASH={}", dnsmos_model_hash);
     println!("cargo:warning=DNSMOS 模型: {} bytes", dnsmos_model_data.len());
-}
 
     // 处理 DNSMOS ONNX Runtime DLL（仅 Windows）
     #[cfg(target_os = "windows")]
@@ -93,3 +92,9 @@ fn main() {
             println!("cargo:warning=ONNX Runtime providers DLL: {} bytes", providers_data.len());
         }
     }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 非 Windows 平台不需要处理 DLL
+    }
+}
