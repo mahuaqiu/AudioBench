@@ -73,3 +73,23 @@ fn main() {
     println!("cargo:rustc-env=DNSMOS_MODEL_HASH={}", dnsmos_model_hash);
     println!("cargo:warning=DNSMOS 模型: {} bytes", dnsmos_model_data.len());
 }
+
+    // 处理 DNSMOS ONNX Runtime DLL（仅 Windows）
+    #[cfg(target_os = "windows")]
+    {
+        let dll_path = Path::new(&manifest_dir).join("bin/onnxruntime.dll");
+        if dll_path.exists() {
+            let dll_data = fs::read(&dll_path).expect("无法读取 ONNX Runtime DLL");
+            let dll_hash = format!("{:016x}", dll_data.len());
+            println!("cargo:rustc-env=ONNXRUNTIME_DLL_HASH={}", dll_hash);
+            println!("cargo:warning=ONNX Runtime DLL: {} bytes", dll_data.len());
+        }
+        
+        let providers_dll_path = Path::new(&manifest_dir).join("bin/onnxruntime_providers_shared.dll");
+        if providers_dll_path.exists() {
+            let providers_data = fs::read(&providers_dll_path).expect("无法读取 ONNX Runtime providers DLL");
+            let providers_hash = format!("{:016x}", providers_data.len());
+            println!("cargo:rustc-env=ONNXRUNTIME_PROVIDERS_DLL_HASH={}", providers_hash);
+            println!("cargo:warning=ONNX Runtime providers DLL: {} bytes", providers_data.len());
+        }
+    }

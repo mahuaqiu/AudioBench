@@ -11,10 +11,16 @@
 //! - 输出：多项式校准后的 SIG/BAK/OVRL 分数
 
 use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
 use ndarray::Array2;
 
 /// DNSMOS ONNX 模型（编译时嵌入）
 const DNSMOS_MODEL: &[u8] = include_bytes!("../bin/model/sig_bak_ovr.onnx");
+
+/// ONNX Runtime DLL（编译时嵌入，运行时释放到临时目录）
+const ONNXRUNTIME_DLL: &[u8] = include_bytes!("../../bin/onnxruntime.dll");
+const ONNXRUNTIME_PROVIDERS_DLL: &[u8] = include_bytes!("../../bin/onnxruntime_providers_shared.dll");
 
 /// 模型 hash（用于缓存验证）
 const DNSMOS_MODEL_HASH: &str = env!("DNSMOS_MODEL_HASH");
@@ -36,6 +42,52 @@ const MODEL_SAMPLE_RATE: u32 = 16000;
 const MODEL_INPUT_LENGTH: usize = 144160; // 9.01s @ 16kHz
 const WINDOW_STEP: usize = 16000; // 1s 步进
 
+/// 获取临时目录路径（包含 DLL）
+fn get_dll_dir() -> PathBuf {
+    let temp_dir = std::env::temp_dir().join("audiobench_dnsmos");
+    if !temp_dir.exists() {
+        fs::create_dir_all(&temp_dir).expect("无法创建 DNSMOS 临时目录");
+    }
+    temp_dir
+}
+
+/// 初始化 DLL（首次调用时释放到临时目录��
+static INIT_DLL: std::sync::Once = std::sync::Once::new();
+
+fn init_dlls() {
+    INIT_DLL.call_once(|| {
+        let dll_dir = get_dll_dir();
+        
+        // 释放主 DLL
+        let dll_path = dll_dir.join("onnxruntime.dll");
+        if !dll_path.exists() {
+            fs::write(&dll_path, ONNXRUNTIME_DLL).expect("无法释放 onnxruntime.dll");
+        }
+        
+        // 释放 providers DLL
+        let providers_path = dll_dir.join("onnxruntime_providers_shared.dll");
+        if !providers_path.exists() {
+            fs::write(&providers_path, ONNXRUNTIME_PROVIDERS_DLL).expect("无法释放 onnxruntime_providers_shared.dll");
+        }
+        
+        // 将临时目录添加到 DLL 搜索路径（Windows）
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::ffi::OsStrExt;
+            let path_str = dll_dir.to_string_lossy().to_owned();
+            let path_wide: Vec<u16> = std::ffi::OsStr::new(&*path_str)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            unsafe {
+                libc::SetDllDirectoryW(path_wide.as_ptr());
+            }
+        }
+        
+        println!("[+] DNSMOS DLL 已释放到: {:?}", dll_dir);
+    });
+}
+
 // ============================================================================
 // 辅助函数
 // ============================================================================
@@ -46,7 +98,7 @@ fn polyfit(x: f64, (a, b, c): (f64, f64, f64)) -> f64 {
     a * x * x + b * x + c
 }
 
-/// 将值裁剪到 [min, max] 范围
+/// 将值裁剪到 [min, max] 范围，处理 NaN 和无穷值
 #[inline]
 fn clamp(value: f64, min_val: f64, max_val: f64) -> f64 {
     // 处理 NaN 和无穷值，返回默认值 3.0（中间分）
@@ -121,7 +173,7 @@ fn segment_audio(samples_16k: &[f64]) -> Vec<Vec<f64>> {
 // 公开 API
 // ============================================================================
 
-/// DNSMOS 评估结果
+/// DNSMOS 评估��果
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DnsMosResult {
     /// 人声信号分 (1.0-5.0)
@@ -150,6 +202,9 @@ pub struct DnsMosEvaluator {
 impl DnsMosEvaluator {
     /// 从嵌入的模型字节创建评估器
     pub fn new(model_bytes: &[u8]) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        // 初始化 DLL（释放到临时目录并添加搜索路径）
+        init_dlls();
+        
         let session = ort::Session::builder()?
             .commit_from_memory(model_bytes)?;
         Ok(Self { session })
@@ -231,6 +286,8 @@ mod tests {
         assert!((clamp(0.5, 1.0, 5.0) - 1.0).abs() < 1e-6);
         assert!((clamp(6.0, 1.0, 5.0) - 5.0).abs() < 1e-6);
         assert!((clamp(3.0, 1.0, 5.0) - 3.0).abs() < 1e-6);
+        // NaN 处理
+        assert!((clamp(f64::NAN, 1.0, 5.0) - 3.0).abs() < 1e-6);
     }
 
     #[test]
