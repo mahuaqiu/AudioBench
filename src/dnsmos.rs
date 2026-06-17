@@ -49,6 +49,10 @@ fn polyfit(x: f64, (a, b, c): (f64, f64, f64)) -> f64 {
 /// 将值裁剪到 [min, max] 范围
 #[inline]
 fn clamp(value: f64, min_val: f64, max_val: f64) -> f64 {
+    // 处理 NaN 和无穷值，返回默认值 3.0（中间分）
+    if value.is_nan() || value.is_infinite() {
+        return 3.0;
+    }
     value.max(min_val).min(max_val)
 }
 
