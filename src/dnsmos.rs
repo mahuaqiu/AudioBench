@@ -55,10 +55,17 @@ mod windows_impl {
                 let _ = fs::write(&providers_path, ONNXRUNTIME_PROVIDERS_DLL);
             }
 
-            // 设置 DLL 搜索路径（windows crate 会自动处理字符串转换）
+            // 设置 DLL 搜索路径
             {
+                use std::os::windows::ffi::OsStrExt;
                 let path_str = dll_dir.to_string_lossy();
-                let _ = windows::Win32::System::LibraryLoader::SetDllDirectoryW(path_str.as_ref());
+                let path_wide: Vec<u16> = std::ffi::OsStr::new(&*path_str)
+                    .encode_wide()
+                    .chain(std::iter::once(0))
+                    .collect();
+                unsafe {
+                    windows_sys::Win32::System::LibraryLoader::SetDllDirectoryW(path_wide.as_ptr());
+                }
             }
 
             eprintln!("[+] DNSMOS DLL 已释放到: {:?}", dll_dir);
