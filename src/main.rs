@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 加载 DNSMOS 模型（仅在需要时加载，可优化为延迟加载）
     println!("[*] 加载 DNSMOS 模型...");
     const DNSMOS_MODEL: &[u8] = include_bytes!("../bin/model/sig_bak_ovr.onnx");
-    let dnsmos_evaluator = dnsmos::DnsMosEvaluator::new(DNSMOS_MODEL)
+    let mut dnsmos_evaluator = dnsmos::DnsMosEvaluator::new(DNSMOS_MODEL)
         .map_err(|e| format!("DNSMOS 模型加载失败: {}", e))?;
     println!("      DNSMOS 模型加载成功");
 
