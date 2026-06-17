@@ -138,12 +138,11 @@ pub fn print_console_report(report: &EvaluationReport) {
     let n = report.segments.len();
     let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms.abs()).sum();
     let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms.abs()).sum();
-    let total_truncation: f64 = report.segments.iter().map(|s| s.anomaly.truncation_duration_ms.abs()).sum();
     let avg_spectral: f64 = if n == 0 { 0.0 } else {
         report.segments.iter().map(|s| s.anomaly.spectral_artifacts_score).sum::<f64>() / n as f64
     };
-    println!("  异常检测: 时域中断={:.0}ms, 时轴漂移={:.0}ms, 内容截断={:.0}ms, 频谱损伤={:.2}",
-             total_dropout, total_warping, total_truncation, avg_spectral);
+    println!("  异常检测: 时域中断={:.0}ms, 时轴漂移={:.0}ms, 频谱损伤={:.2}",
+             total_dropout, total_warping, avg_spectral);
 
     println!("\n{}", "-".repeat(60));
     println!("                    各段详细评分");
@@ -192,12 +191,8 @@ pub fn print_console_report(report: &EvaluationReport) {
                 println!("    时轴漂移: {:.0}ms ({}, {}次)",
                          warping_ms, type_str, seg.anomaly.warpings.len());
             }
-            if seg.anomaly.truncation_duration_ms > 0.0 {
-                println!("    内容截断: {:.0}ms ({}次)", 
-                         seg.anomaly.truncation_duration_ms, seg.anomaly.truncations.len());
-            }
             if seg.anomaly.spectral_artifacts_score > 0.25 {
-                println!("    频谱损伤: {:.1}%", 
+                println!("    频谱损伤: {:.1}%",
                          seg.anomaly.spectral_artifacts_score * 100.0);
             }
         } else {

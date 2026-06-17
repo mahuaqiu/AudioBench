@@ -26,14 +26,8 @@ pub struct AudioAnomalyReport {
     /// 频谱损伤严重程度 (0.0=无损伤, 1.0=极度损伤)
     pub spectral_artifacts_score: f64,
 
-    /// 麻烦损伤事件列表（低相似度时间段）
+    /// 频谱损伤事件列表（低相似度时间段）
     pub spectral_artifacts: Vec<SpectralArtifactEvent>,
-
-    /// 内容截断/裁剪事件列表（段实际长度明显短于参考）
-    pub truncations: Vec<TruncationEvent>,
-
-    /// 内容截断总时长 (ms)
-    pub truncation_duration_ms: f64,
 }
 
 /// 时域中断事件（异常静音/丢包）
@@ -632,7 +626,5 @@ pub fn detect_anomalies(
         warping_duration_ms,
         spectral_artifacts_score,
         spectral_artifacts,
-        truncations,
-        truncation_duration_ms,
     }
 }

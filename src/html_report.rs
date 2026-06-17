@@ -51,8 +51,39 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
    // 异常检测统计
    let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms.abs()).sum();
    let total_warping: f64 = report.segments.iter().map(|s| s.anomaly.warping_duration_ms.abs()).sum();
-   let total_truncation: f64 = report.segments.iter().map(|s| s.anomaly.truncation_duration_ms.abs()).sum();
     let avg_spectral: f64 = if report.segments.is_empty() { 0.0 } else { report.segments.iter().map(|s| s.anomaly.spectral_artifacts_score).sum::<f64>() / report.segments.len() as f64 };
+
+    // 时轴漂移子类型统计
+    let mut warping_cut = 0usize;
+    let mut warping_insertion = 0usize;
+    let mut warping_stretch = 0usize;
+    let mut warping_compress = 0usize;
+    for seg in &report.segments {
+        for w in &seg.anomaly.warpings {
+            match w.drift_type {
+                crate::metrics::WarpingType::Cut => warping_cut += 1,
+                crate::metrics::WarpingType::Insertion => warping_insertion += 1,
+                crate::metrics::WarpingType::Stretch => warping_stretch += 1,
+                crate::metrics::WarpingType::Compress => warping_compress += 1,
+            }
+        }
+    }
+    let warping_types_str = {
+        let mut parts = vec![];
+        if warping_cut > 0 { parts.push(format!("裁剪{}次", warping_cut)); }
+        if warping_insertion > 0 { parts.push(format!("插入{}次", warping_insertion)); }
+        if warping_stretch > 0 { parts.push(format!("拉伸{}次", warping_stretch)); }
+        if warping_compress > 0 { parts.push(format!("压缩{}次", warping_compress)); }
+        if parts.is_empty() { "无".to_string() } else { parts.join(", ") }
+    };
+
+    // MOS 分是否低于 3 分
+    let mos_is_low = report.overall.moslqo_mean < 3.0;
+    let mos_class = if mos_is_low { "bad" } else { "good" };
+
+    // 是否存在任何异常
+    let has_any_anomaly = total_dropout > 0.0 || total_warping > 0.0 || avg_spectral > 0.25;
+    let anomaly_class = if has_any_anomaly { "bad" } else { "" };
 
     // 模式名称
     let mode_name = if report.config.target_sample_rate == 16000 { "语音模式" } else { "音频模式" };
@@ -132,7 +163,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="cards">
 <div class="card">
 <div class="card-label">MOS-LQO 均值</div>
-<div class="card-value good">{mos_mean:.2}</div>
+<div class="card-value {mos_class}">{mos_mean:.2}</div>
 <div class="card-hint">ViSQOL 预测质量分（1-5），值越高越好<br>范围：{mos_min:.2}~{mos_max:.2}</div>
 </div>
 <div class="card">
@@ -142,22 +173,18 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 </div>
 <div class="card">
 <div class="card-label">时域中断</div>
-<div class="card-value">{dropout_dur:.0}ms</div>
+<div class="card-value {anomaly_class}">{dropout_dur:.0}ms</div>
 <div class="card-hint">网络丢包/静音（能量断崖下跌）</div>
 </div>
 <div class="card">
 <div class="card-label">时轴漂移</div>
-<div class="card-value">{warping_dur:.0}ms</div>
-<div class="card-hint">音频被拉长/压缩（抖动缓冲）</div>
+<div class="card-value {anomaly_class}">{warping_dur:.0}ms</div>
+<div class="card-hint">{warping_types_str}</div>
 </div>
-<div class="card">
-<div class="card-label">内容截断</div>
-<div class="card-value">{truncation_dur:.0}ms</div>
-<div class="card-hint">段内内容缺失/裁剪</div>
 </div>
 <div class="card">
 <div class="card-label">频谱损伤</div>
-<div class="card-value">{spectral_score_pct}</div>
+<div class="card-value {anomaly_class}">{spectral_score_pct}</div>
 <div class="card-hint">低相似度片段比例</div>
 </div>
 </div>
@@ -459,10 +486,12 @@ function multiSegLegend(segCount) {{
         mos_mean = report.overall.moslqo_mean,
         mos_min = report.overall.moslqo_min,
         mos_max = report.overall.moslqo_max,
+        mos_class = mos_class,
+        anomaly_class = anomaly_class,
         vnsim_mean = report.overall.vnsim_mean,
         dropout_dur = total_dropout,
         warping_dur = total_warping,
-        truncation_dur = total_truncation,
+        warping_types_str = warping_types_str,
         spectral_score_pct = avg_spectral * 100.0,
         // JS 字符串字面量注入
         report_json = to_js_str(&json_data),
@@ -526,28 +555,24 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         } else {
             seg.band_energy_ratios.iter().sum::<f64>() / seg.band_energy_ratios.len() as f64
         };
-        // 异常检测：时域中断 + 时轴漂移 + 内容截断 + 频谱损伤
+        // 异常检测：时域中断 + 时轴漂移 + 频谱损伤
         let dropout_ms = seg.anomaly.dropout_duration_ms;
         let warping_ms = seg.anomaly.warping_duration_ms;
-        let truncation_ms = seg.anomaly.truncation_duration_ms;
         let spectral = seg.anomaly.spectral_artifacts_score;
-       let anomaly_str = if seg.anomaly.has_anomaly {
-           let mut parts = vec![];
-           if dropout_ms > 0.0 {
-               parts.push(format!("中断{:.0}ms", dropout_ms.abs()));
-           }
-           if !seg.anomaly.warpings.is_empty() {
-               // 显示漂移子类型：漂移Xms(类型1/类型2)
-               let ms = warping_ms.abs();
-               let types: Vec<String> = seg.anomaly.warpings.iter()
-                   .map(|w| w.drift_type.chinese().to_string())
-                   .collect();
-               let type_str = types.join("/");
-               parts.push(format!("漂移{:.0}ms({})", ms, type_str));
-           }
-           if truncation_ms.abs() > 0.0 {
-               parts.push(format!("截断{:.0}ms", truncation_ms.abs()));
-           }
+        let anomaly_str = if seg.anomaly.has_anomaly {
+            let mut parts = vec![];
+            if dropout_ms > 0.0 {
+                parts.push(format!("中断{:.0}ms", dropout_ms.abs()));
+            }
+            if !seg.anomaly.warpings.is_empty() {
+                // 显示漂移子类型：漂移Xms(类型1/类型2)
+                let ms = warping_ms.abs();
+                let types: Vec<String> = seg.anomaly.warpings.iter()
+                    .map(|w| w.drift_type.chinese().to_string())
+                    .collect();
+                let type_str = types.join("/");
+                parts.push(format!("漂移{:.0}ms({})", ms, type_str));
+            }
             if spectral > 0.25 {
                 parts.push(format!("损伤{:.0}%", spectral * 100.0));
             }
@@ -555,8 +580,13 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         } else {
             "无".to_string()
         };
-        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td>{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{}</td></tr>",
-            i+1, seg.start_time_s, seg.end_time_s, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, anomaly_str)
+
+        // 颜色类：MOS < 3 用红色，异常用红色
+        let mos_class = if seg.quality.moslqo < 3.0 { "class=\"bad\"" } else { "" };
+        let anomaly_class = if seg.anomaly.has_anomaly { "class=\"bad\"" } else { "" };
+
+        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td {}>{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td {}>{}</td></tr>",
+            i+1, seg.start_time_s, seg.end_time_s, mos_class, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, anomaly_class, anomaly_str)
     }).collect()
 }
 

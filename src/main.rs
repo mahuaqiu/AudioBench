@@ -287,8 +287,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             warping_duration_ms: 0.0,
             spectral_artifacts_score: 0.0,
             spectral_artifacts: vec![],
-            truncations: vec![],
-            truncation_duration_ms: 0.0,
+            // 内容截断已移除
         };
 
         // 幅值统计
@@ -352,32 +351,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         all_warping_events.extend(seg_events);
     }
 
-    // 维度二补充：内容截断/裁剪检测
-    // 直接比对各段实际长度 vs 参考长度，绕过中断/频谱检测对裁剪的盲区。
-    let truncation_events = metrics::detect_truncation(
-        &seg_actual_samples,
-        ref_audio.samples.len(),
-        ref_audio.sample_rate,
-        metrics::TruncationThreshold::default(),
-    );
-
-    // [DIAG] 全局截断检测诊断：所有段实际长度 + 阈值
-    {
-        let ref_ms = ref_audio.samples.len() as f64 / ref_audio.sample_rate as f64 * 1000.0;
-        let thr = metrics::TruncationThreshold::default();
-        println!("[DIAG] === 截断检测汇总 === 基准 ref_samples全长={} ({:.0}ms), 阈值 trunc>{}ms",
-                 ref_audio.samples.len(), ref_ms, thr.min_truncation_ms);
-        for (i, &actual) in seg_actual_samples.iter().enumerate() {
-            let deg_ms = actual as f64 / ref_audio.sample_rate as f64 * 1000.0;
-            let trunc_ms = ref_ms - deg_ms;
-            let triggers = trunc_ms >= thr.min_truncation_ms;
-            println!("[DIAG]    第{}段: seg_actual={}/ {:.3}s, trunc={:.1}ms {}",
-                     i + 1, actual, actual as f64 / ref_audio.sample_rate as f64,
-                     trunc_ms,
-                     if triggers { "→ 触发截断" } else { "→ 未触发" });
-        }
-    }
-
     // 维度三：频谱损伤检测
     let artifact_threshold = 0.4; // 相似度低于 0.4 判定为损伤（与 AnomalyDetectConfig 一致）
     let (_spectral_score, spectral_events) = metrics::detect_spectral_artifacts(
@@ -429,13 +402,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .cloned()
             .collect();
 
-        // 合并内容截断事件到对应段
-        let seg_truncations: Vec<metrics::TruncationEvent> = truncation_events.iter()
-            .filter(|t| t.segment_index == seg_idx)
-            .cloned()
-            .collect();
-        let seg_truncation_ms: f64 = seg_truncations.iter().map(|t| t.truncation_ms).sum();
-
         // 计算该段的频谱损伤比例（分母排除首尾 patch，与 detect_spectral_artifacts 一致）
         let seg_total_patch = all_patch_sims.get(seg_idx).map(|p| p.len()).unwrap_or(0);
         let seg_valid_patch = if seg_total_patch >= 4 { seg_total_patch - 2 } else { seg_total_patch };
@@ -450,15 +416,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // has_anomaly 的频谱门槛从 0.1 提到 0.25，避免少量低相似度 patch 就误标异常
         let has_anomaly = seg_result.anomaly.has_anomaly
             || !seg_warpings.is_empty()
-            || !seg_truncations.is_empty()
             || seg_spectral_score > 0.25;
 
         seg_result.anomaly.warpings = seg_warpings;
         seg_result.anomaly.warping_duration_ms = seg_warping_ms;
         seg_result.anomaly.spectral_artifacts_score = seg_spectral_score;
         seg_result.anomaly.spectral_artifacts = seg_artifacts;
-        seg_result.anomaly.truncations = seg_truncations;
-        seg_result.anomaly.truncation_duration_ms = seg_truncation_ms;
+        // 内容截断已移除
         seg_result.anomaly.has_anomaly = has_anomaly;
     }
     
