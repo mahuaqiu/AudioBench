@@ -61,4 +61,15 @@ fn main() {
     let speech_model_hash = format!("{:016x}", speech_model_data.len());
     println!("cargo:rustc-env=VISQOL_SPEECH_MODEL_HASH={}", speech_model_hash);
     println!("cargo:warning=ViSQOL 语音模型: {} bytes", speech_model_data.len());
+
+    // 处理 DNSMOS ONNX 模型
+    let dnsmos_model_path = model_dir.join("sig_bak_ovr.onnx");
+    if !dnsmos_model_path.exists() {
+        println!("cargo:warning=DNSMOS 模型文件不存在: {:?}，创建占位文件", dnsmos_model_path);
+        fs::write(&dnsmos_model_path, b"PLACEHOLDER_DNSMOS_MODEL").expect("无法创建占位文件");
+    }
+    let dnsmos_model_data = fs::read(&dnsmos_model_path).expect("无法读取 DNSMOS 模型文件");
+    let dnsmos_model_hash = format!("{:016x}", dnsmos_model_data.len());
+    println!("cargo:rustc-env=DNSMOS_MODEL_HASH={}", dnsmos_model_hash);
+    println!("cargo:warning=DNSMOS 模型: {} bytes", dnsmos_model_data.len());
 }

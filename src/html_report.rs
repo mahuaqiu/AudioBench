@@ -16,6 +16,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     let mos_values: Vec<f64> = report.segments.iter().map(|s| s.quality.moslqo).collect();
     let vnsim_values: Vec<f64> = report.segments.iter().map(|s| s.quality.vnsim).collect();
 
+    // DNSMOS 数据
+    let sig_values: Vec<f64> = report.segments.iter().filter_map(|s| s.sig).collect();
+    let bak_values: Vec<f64> = report.segments.iter().filter_map(|s| s.bak).collect();
+    let ovrl_values: Vec<f64> = report.segments.iter().filter_map(|s| s.ovrl).collect();
+
     // fVNSIM 数据
     // fVNSIM 数据（取全部，不限制32个）
     let fvnsim_data: Vec<Vec<f64>> = report.segments.iter()
@@ -42,6 +47,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     let fvnsim_json = serde_json::to_string(&fvnsim_data).unwrap_or("[]".to_string());
     let energy_json = serde_json::to_string(&energy_data).unwrap_or("[]".to_string());
     let patch_json = serde_json::to_string(&patch_data).unwrap_or("[]".to_string());
+    // DNSMOS JSON
+    let sig_values_json = serde_json::to_string(&sig_values).unwrap_or("[]".to_string());
+    let bak_values_json = serde_json::to_string(&bak_values).unwrap_or("[]".to_string());
+    let ovrl_values_json = serde_json::to_string(&ovrl_values).unwrap_or("[]".to_string());
     // centerFreqBands - 各频带中心频率（用于 tooltip 显示）
     let center_freq_bands: Vec<f64> = report.segments.first()
         .map(|s| s.quality.center_freq_bands.clone())
@@ -84,6 +93,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     // MOS 分是否低于 3 分
     let mos_is_low = report.overall.moslqo_mean < 3.0;
     let mos_class = if mos_is_low { "bad" } else { "good" };
+
+    // DNSMOS 颜色类
+    let sig_class = if report.overall.sig_mean.map(|v| v < 3.0).unwrap_or(false) { "bad" } else { "good" };
+    let bak_class = if report.overall.bak_mean.map(|v| v < 3.0).unwrap_or(false) { "bad" } else { "good" };
+    let ovrl_class = if report.overall.ovrl_mean.map(|v| v < 3.0).unwrap_or(false) { "bad" } else { "good" };
 
     // 各异常类型独立判断颜色
     let dropout_class = if total_dropout > 0.0 { "bad" } else { "" };
@@ -201,10 +215,25 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-value {spectral_class}">{spectral_score_pct}%</div>
 <div class="card-hint">低相似度片段比例</div>
 </div>
+<div class="card">
+<div class="card-label">DNSMOS-SIG</div>
+<div class="card-value {sig_class}">{sig_mean:.2}</div>
+<div class="card-hint">人声信号分（1-5），值越高越好</div>
+</div>
+<div class="card">
+<div class="card-label">DNSMOS-BAK</div>
+<div class="card-value {bak_class}">{bak_mean:.2}</div>
+<div class="card-hint">背景噪声分（1-5），值越高越好</div>
+</div>
+<div class="card">
+<div class="card-label">DNSMOS-OVRL</div>
+<div class="card-value {ovrl_class}">{ovrl_mean:.2}</div>
+<div class="card-hint">整体综合分（1-5），值越高越好</div>
+</div>
 </div>
 
 <div class="section"><div class="section-title">各段详细评分</div>
-<table id="segmentsTable"><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>异常</th></tr></thead>
+<table id="segmentsTable"><thead><tr><th>段</th><th>时间范围</th><th>MOS-LQO</th><th>VNSIM</th><th>SIG</th><th>BAK</th><th>OVRL</th><th>低频相似度</th><th>高频相似度</th><th>能量比均值</th><th>异常</th></tr></thead>
 <tbody>{table_rows}</tbody>
 </table>
 <div class="pagination" id="tablePagination"></div>
@@ -224,8 +253,13 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="waveform-time-axis" id="waveformTimeAxis"></div>
 </div>
 
-<div class="section" id="sectionMos"><div class="section-title">MOS-LQO 分段趋势</div>
+<div class="chart-row">
+<div class="section" style="margin-bottom:0" id="sectionMos"><div class="section-title">MOS-LQO 分段趋势</div>
 <div class="chart-full"><canvas id="chartMos"></canvas></div>
+</div>
+<div class="section" style="margin-bottom:0" id="sectionDnsmos"><div class="section-title">DNSMOS 分段趋势</div>
+<div class="chart-full"><canvas id="chartDnsmos"></canvas></div>
+</div>
 </div>
 
 <div class="chart-row">
@@ -264,6 +298,12 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dd>检测同一段音频内容在录制端的时长偏差，反映网络抖动导致的音频拉长/压缩。</dd>
 <dt><span class="tag">频谱损伤</span>机械音</dt>
 <dd>检测时域能量正常但频域结构被破坏的片段（PLC 伪造音、编解码杂音等）。</dd>
+<dt><span class="tag">SIG</span>人声信号分</dt>
+<dd>DNSMOS 的人声信号质量评分，符合 ITU-T P.835 标准。评估人声是否清晰、自然。如果降噪算法用力过猛导致发言人声音变小或变哑，这个分数就会很低。值域 1.0-5.0，分数越高越好。</dd>
+<dt><span class="tag">BAK</span>背景噪声分</dt>
+<dd>DNSMOS 的背景噪声质量评分，符合 ITU-T P.835 标准。评估背景杂音的消除程度。如果会议室里键盘敲击声、空调风噪被去得很干净，这个分数就会很高。值域 1.0-5.0，分数越高越好。</dd>
+<dt><span class="tag">OVRL</span>整体综合分</dt>
+<dd>DNSMOS 的整体质量评分，符合 ITU-T P.835 标准。结合人声和噪声后的整体听感主��评分。值域 1.0-5.0，分数越高越好。</dd>
 </dl>
 </div>
 
@@ -438,6 +478,11 @@ var energyData = JSON.parse({energy_json});
 var patchData = JSON.parse({patch_json});
 var centerFreqBands = JSON.parse({center_freq_json});
 
+// DNSMOS 数据
+var sigValues = JSON.parse({sig_values_json});
+var bakValues = JSON.parse({bak_values_json});
+var ovrlValues = JSON.parse({ovrl_values_json});
+
 var segColors = ['#3182ce','#e53e3e','#38a169','#d69e2e','#805ad5','#dd6b20','#319795','#b83280'];
 
 // MOS-LQO 分段趋势（单段不显示）
@@ -449,6 +494,21 @@ if(segLabels.length > 1){{
   }});
 }} else {{
   document.getElementById('sectionMos').style.display = 'none';
+}}
+
+// DNSMOS 分段趋势（单段不显示）
+if(segLabels.length > 1 && sigValues.length > 0){{
+  new Chart(document.getElementById('chartDnsmos'),{{
+    type:'line',
+    data:{{labels:segLabels,datasets:[
+      {{label:'SIG(人声)',data:sigValues,borderColor:'#e53e3e',backgroundColor:'rgba(229,62,62,0.1)',fill:true,tension:0.3,pointRadius:5}},
+      {{label:'BAK(背景)',data:bakValues,borderColor:'#38a169',backgroundColor:'rgba(56,161,105,0.1)',fill:true,tension:0.3,pointRadius:5}},
+      {{label:'OVRL(整体)',data:ovrlValues,borderColor:'#805ad5',backgroundColor:'rgba(128,90,213,0.1)',fill:true,tension:0.3,pointRadius:5}}
+    ]}},
+    options:{{responsive:true,maintainAspectRatio:false,scales:{{y:{{min:1,max:5,title:{{display:true,text:'DNSMOS'}}}}}},plugins:{{title:{{display:true,text:'DNSMOS分段趋势'}},legend:{{labels:{{usePointStyle:true,pointStyle:'circle',boxWidth:8}}}}}}}}
+  }});
+}} else {{
+  document.getElementById('sectionDnsmos').style.display = 'none';
 }}
 
 // VNSIM 分段趋势（单段不显示）
@@ -681,6 +741,12 @@ function multiSegLegend(segCount) {{
         warping_dur = total_warping,
         warping_types_str = warping_types_str,
         spectral_score_pct = avg_spectral * 100.0,
+        sig_mean = report.overall.sig_mean.unwrap_or(0.0),
+        bak_mean = report.overall.bak_mean.unwrap_or(0.0),
+        ovrl_mean = report.overall.ovrl_mean.unwrap_or(0.0),
+        sig_class = sig_class,
+        bak_class = bak_class,
+        ovrl_class = ovrl_class,
         // JS 字符串字面量注入
         report_json = to_js_str(&json_data),
         seg_labels_json = to_js_str(&seg_labels_json),
@@ -690,6 +756,9 @@ function multiSegLegend(segCount) {{
         energy_json = to_js_str(&energy_json),
         patch_json = to_js_str(&patch_json),
         center_freq_json = to_js_str(&center_freq_json),
+        sig_values_json = to_js_str(&sig_values_json),
+        bak_values_json = to_js_str(&bak_values_json),
+        ovrl_values_json = to_js_str(&ovrl_values_json),
         waveform_ref_json = to_js_str(&waveform_ref_json),
         waveform_deg_json = to_js_str(&waveform_deg_json),
         table_rows = table_rows,
@@ -775,8 +844,18 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         let mos_color = if seg.quality.moslqo < 3.0 { "color:#e53e3e;font-weight:bold;" } else { "" };
         let anomaly_color = if seg.anomaly.has_anomaly { "color:#e53e3e;font-weight:bold;" } else { "" };
 
-        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td style=\"{}\">{:.2}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td style=\"{}\">{}</td></tr>",
-            i+1, seg.start_time_s, seg.end_time_s, mos_color, seg.quality.moslqo, seg.quality.vnsim, low, high, energy_mean, anomaly_color, anomaly_str)
+        // DNSMOS 颜色
+        let sig_str = seg.sig.map(|v| format!("{:.2}", v)).unwrap_or("-".to_string());
+        let bak_str = seg.bak.map(|v| format!("{:.2}", v)).unwrap_or("-".to_string());
+        let ovrl_str = seg.ovrl.map(|v| format!("{:.2}", v)).unwrap_or("-".to_string());
+        let sig_color = if seg.sig.map(|v| v < 3.0).unwrap_or(false) { "color:#e53e3e;" } else { "" };
+        let bak_color = if seg.bak.map(|v| v < 3.0).unwrap_or(false) { "color:#e53e3e;" } else { "" };
+        let ovrl_color = if seg.ovrl.map(|v| v < 3.0).unwrap_or(false) { "color:#e53e3e;" } else { "" };
+
+        format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td style=\"{}\">{:.2}</td><td>{:.4}</td><td style=\"{}\">{}</td><td style=\"{}\">{}</td><td style=\"{}\">{}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td style=\"{}\">{}</td></tr>",
+            i+1, seg.start_time_s, seg.end_time_s, mos_color, seg.quality.moslqo, seg.quality.vnsim,
+            sig_color, sig_str, bak_color, bak_str, ovrl_color, ovrl_str,
+            low, high, energy_mean, anomaly_color, anomaly_str)
     }).collect()
 }
 

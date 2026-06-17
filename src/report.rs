@@ -35,6 +35,12 @@ pub struct SegmentResult {
     pub level_ref: LevelResult,
     pub level_deg: LevelResult,
     pub band_energy_ratios: Vec<f64>,
+    /// DNSMOS 人声信号分 (1.0-5.0)
+    pub sig: Option<f64>,
+    /// DNSMOS 背景噪声分 (1.0-5.0)
+    pub bak: Option<f64>,
+    /// DNSMOS 整体综合分 (1.0-5.0)
+    pub ovrl: Option<f64>,
 }
 
 /// 整体统计汇总
@@ -46,6 +52,12 @@ pub struct OverallStats {
     pub moslqo_max: f64,
     pub moslqo_stddev: f64,
     pub vnsim_mean: f64,
+    /// DNSMOS SIG 均值
+    pub sig_mean: Option<f64>,
+    /// DNSMOS BAK 均值
+    pub bak_mean: Option<f64>,
+    /// DNSMOS OVRL 均值
+    pub ovrl_mean: Option<f64>,
 }
 
 /// 完整评估报告
@@ -109,6 +121,9 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
             segment_count: 0,
             moslqo_mean: 0.0, moslqo_min: 0.0, moslqo_max: 0.0, moslqo_stddev: 0.0,
             vnsim_mean: 0.0,
+            sig_mean: None,
+            bak_mean: None,
+            ovrl_mean: None,
         };
     }
 
@@ -121,6 +136,15 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
 
     let vnsim_mean = segments.iter().map(|s| s.quality.vnsim).sum::<f64>() / n as f64;
 
+    // DNSMOS 统计
+    let sig_values: Vec<f64> = segments.iter().filter_map(|s| s.sig).collect();
+    let bak_values: Vec<f64> = segments.iter().filter_map(|s| s.bak).collect();
+    let ovrl_values: Vec<f64> = segments.iter().filter_map(|s| s.ovrl).collect();
+
+    let sig_mean = if sig_values.is_empty() { None } else { Some(sig_values.iter().sum::<f64>() / sig_values.len() as f64) };
+    let bak_mean = if bak_values.is_empty() { None } else { Some(bak_values.iter().sum::<f64>() / bak_values.len() as f64) };
+    let ovrl_mean = if ovrl_values.is_empty() { None } else { Some(ovrl_values.iter().sum::<f64>() / ovrl_values.len() as f64) };
+
     OverallStats {
         segment_count: n,
         moslqo_mean: mos_mean,
@@ -128,6 +152,9 @@ fn compute_overall_stats(segments: &[SegmentResult]) -> OverallStats {
         moslqo_max: mos_max,
         moslqo_stddev: mos_stddev,
         vnsim_mean,
+        sig_mean,
+        bak_mean,
+        ovrl_mean,
     }
 }
 
@@ -157,6 +184,11 @@ pub fn print_console_report(report: &EvaluationReport) {
              o.moslqo_mean, o.moslqo_min, o.moslqo_max, o.moslqo_stddev);
     println!("  VNSIM 均值: {:.4}", o.vnsim_mean);
 
+    // DNSMOS 统计
+    if let (Some(sig), Some(bak), Some(ovrl)) = (o.sig_mean, o.bak_mean, o.ovrl_mean) {
+        println!("  DNSMOS: SIG={:.2}, BAK={:.2}, OVRL={:.2}", sig, bak, ovrl);
+    }
+
     // 异常统计汇总
     let n = report.segments.len();
     let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms.abs()).sum();
@@ -177,6 +209,11 @@ pub fn print_console_report(report: &EvaluationReport) {
                  seg.start_time_s, seg.end_time_s);
         println!("    MOS-LQO: {:.2}  VNSIM: {:.4}",
                  seg.quality.moslqo, seg.quality.vnsim);
+
+        // DNSMOS 每段评分
+        if let (Some(sig), Some(bak), Some(ovrl)) = (seg.sig, seg.bak, seg.ovrl) {
+            println!("    DNSMOS: SIG={:.2}  BAK={:.2}  OVRL={:.2}", sig, bak, ovrl);
+        }
 
         if !seg.quality.fvnsim.is_empty() {
             let low_n = (seg.quality.fvnsim.len() / 3).max(1);

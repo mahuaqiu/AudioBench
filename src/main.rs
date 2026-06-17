@@ -13,6 +13,7 @@ mod visqol;
 mod report;
 mod html_report;
 mod time_warping;
+mod dnsmos;
 
 use clap::Parser;
 use std::fs;
@@ -133,6 +134,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !args.recorded.exists() {
         return Err(format!("录制音频文件不存在: {:?}", args.recorded).into());
     }
+
+    // 加载 DNSMOS 模型（仅在需要时加载，可优化为延迟加载）
+    println!("[*] 加载 DNSMOS 模型...");
+    const DNSMOS_MODEL: &[u8] = include_bytes!("../bin/model/sig_bak_ovr.onnx");
+    let dnsmos_evaluator = dnsmos::DnsMosEvaluator::new(DNSMOS_MODEL)
+        .map_err(|e| format!("DNSMOS 模型加载失败: {}", e))?;
+    println!("      DNSMOS 模型加载成功");
 
     println!("[*] 加载参考音频: {:?}", args.reference);
     let ref_audio = audio_io::AudioData::from_wav(&args.reference)?;
@@ -339,6 +347,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = fs::remove_file(&ref_temp);
         let _ = fs::remove_file(&deg_temp);
 
+        // DNSMOS 评估（仅对录制音频，无参考）
+        let (sig, bak, ovrl) = match dnsmos_evaluator.evaluate(&seg_degraded, ref_audio.sample_rate) {
+            Ok(r) => (Some(r.sig), Some(r.bak), Some(r.ovrl)),
+            Err(e) => {
+                println!("[!] 第{}段 DNSMOS 评估失败: {}", seg_idx + 1, e);
+                (None, None, None)
+            }
+        };
+
         segment_results.push(report::SegmentResult {
             segment_index: seg_idx,
             start_time_s: seg_start_time,
@@ -348,6 +365,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             level_ref,
             level_deg,
             band_energy_ratios,
+            sig,
+            bak,
+            ovrl,
         });
     }
 
