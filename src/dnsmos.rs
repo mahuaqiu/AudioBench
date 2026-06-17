@@ -77,23 +77,31 @@ mod windows_impl {
 // 多项式校准系数（来自 Microsoft DNSMOS 官方 Python 源码）
 // ============================================================================
 
+#[cfg(target_os = "windows")]
 const POLY_SIG: (f64, f64, f64) = (-0.08397278, 1.22083953, 0.0052439);
+#[cfg(target_os = "windows")]
 const POLY_BAK: (f64, f64, f64) = (-0.13166888, 1.60915514, -0.39604546);
+#[cfg(target_os = "windows")]
 const POLY_OVRL: (f64, f64, f64) = (-0.06766283, 1.11546468, 0.04602535);
 
+#[cfg(target_os = "windows")]
 const MODEL_SAMPLE_RATE: u32 = 16000;
+#[cfg(target_os = "windows")]
 const MODEL_INPUT_LENGTH: usize = 144160;
+#[cfg(target_os = "windows")]
 const WINDOW_STEP: usize = 16000;
 
 // ============================================================================
 // 辅助函数
 // ============================================================================
 
+#[cfg(target_os = "windows")]
 #[inline]
 fn polyfit(x: f64, (a, b, c): (f64, f64, f64)) -> f64 {
     a * x * x + b * x + c
 }
 
+#[cfg(target_os = "windows")]
 #[inline]
 fn clamp(value: f64, min_val: f64, max_val: f64) -> f64 {
     if value.is_nan() || value.is_infinite() {
@@ -102,6 +110,7 @@ fn clamp(value: f64, min_val: f64, max_val: f64) -> f64 {
     value.max(min_val).min(max_val)
 }
 
+#[cfg(target_os = "windows")]
 fn resample(samples: &[f64], from_rate: u32, to_rate: u32) -> Vec<f64> {
     if from_rate == to_rate {
         return samples.to_vec();
@@ -129,10 +138,12 @@ fn resample(samples: &[f64], from_rate: u32, to_rate: u32) -> Vec<f64> {
     output
 }
 
+#[cfg(target_os = "windows")]
 fn resample_to_16kHz(samples: &[f64], sample_rate: u32) -> Vec<f64> {
     resample(samples, sample_rate, MODEL_SAMPLE_RATE)
 }
 
+#[cfg(target_os = "windows")]
 fn segment_audio(samples: &[f64]) -> Vec<Vec<f64>> {
     if samples.len() < MODEL_INPUT_LENGTH {
         let mut padded = vec![0.0; MODEL_INPUT_LENGTH];
@@ -161,6 +172,7 @@ fn segment_audio(samples: &[f64]) -> Vec<Vec<f64>> {
 // DNSMOS 结果
 // ============================================================================
 
+#[cfg(target_os = "windows")]
 #[derive(Debug, Clone)]
 pub struct DnsMosResult {
     pub sig: f64,
@@ -168,6 +180,7 @@ pub struct DnsMosResult {
     pub ovrl: f64,
 }
 
+#[cfg(target_os = "windows")]
 impl DnsMosResult {
     fn from_raw(sig_raw: f64, bak_raw: f64, ovrl_raw: f64) -> Self {
         let sig = clamp(polyfit(sig_raw, POLY_SIG), 1.0, 5.0);
@@ -187,7 +200,9 @@ pub struct DnsMosEvaluator {
 }
 
 /// DNSMOS 模型字节
+#[cfg(target_os = "windows")]
 const DNSMOS_MODEL: &[u8] = include_bytes!("../bin/model/sig_bak_ovr.onnx");
+#[cfg(target_os = "windows")]
 const DNSMOS_MODEL_HASH: &str = env!("DNSMOS_MODEL_HASH");
 
 #[cfg(target_os = "windows")]
@@ -264,12 +279,13 @@ impl DnsMosEvaluator {
 // 公开 API
 // ============================================================================
 
+#[cfg(target_os = "windows")]
 pub fn evaluate_audio(samples: &[f64], sample_rate: u32) -> Result<DnsMosResult, Box<dyn Error + Send + Sync>> {
     let mut evaluator = DnsMosEvaluator::new(DNSMOS_MODEL)?;
     evaluator.evaluate(samples, sample_rate)
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "windows"))]
 mod tests {
     use super::*;
 
