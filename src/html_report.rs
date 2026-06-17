@@ -299,11 +299,11 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dt><span class="tag">频谱损伤</span>机械音</dt>
 <dd>检测时域能量正常但频域结构被破坏的片段（PLC 伪造音、编解码杂音等）。</dd>
 <dt><span class="tag">DNSMOS-SIG</span> Signal MOS (人声信号分)</dt>
-<dd>符合 ITU-T P.835 标准。评估人声是否清晰、自然——降噪过度导致声音变小或变哑则分数低。分数越高越好（1.0-5.0）。</dd>
+<dd>评估人声是否清晰、自然。如果降噪算法用力过猛导致发言人声音变小或变哑，这个分数就会很低。(ITU-T P.835)</dd>
 <dt><span class="tag">DNSMOS-BAK</span> Background MOS (背景噪声分)</dt>
-<dd>符合 ITU-T P.835 标准。评估背景杂音消除程度——键盘声、空调风噪被去除越干净分数越高。分数越高越好（1.0-5.0）。</dd>
+<dd>评估背景杂音的消除程度。如果会议室里键盘敲击声、空调风噪被去得很干净，这个分数就会很高。(ITU-T P.835)</dd>
 <dt><span class="tag">DNSMOS-OVRL</span> Overall MOS (整体综合分)</dt>
-<dd>符合 ITU-T P.835 标准。结合人声和噪声的整体听感主观评分。分数越高越好（1.0-5.0）。</dd>
+<dd>结合人声和噪声后的整体听感主观评分。</dd>
 </dl>
 </div>
 
