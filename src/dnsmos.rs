@@ -19,8 +19,8 @@ use ndarray::Array2;
 const DNSMOS_MODEL: &[u8] = include_bytes!("../bin/model/sig_bak_ovr.onnx");
 
 /// ONNX Runtime DLL（编译时嵌入，运行时释放到临时目录）
-const ONNXRUNTIME_DLL: &[u8] = include_bytes!("../../bin/onnxruntime.dll");
-const ONNXRUNTIME_PROVIDERS_DLL: &[u8] = include_bytes!("../../bin/onnxruntime_providers_shared.dll");
+const ONNXRUNTIME_DLL: &[u8] = include_bytes!("../bin/onnxruntime.dll");
+const ONNXRUNTIME_PROVIDERS_DLL: &[u8] = include_bytes!("../bin/onnxruntime_providers_shared.dll");
 
 /// 模型 hash（用于缓存验证）
 const DNSMOS_MODEL_HASH: &str = env!("DNSMOS_MODEL_HASH");
@@ -229,10 +229,12 @@ impl DnsMosEvaluator {
             let input_array = Array2::from_shape_vec((1, MODEL_INPUT_LENGTH), input_data)
                 .map_err(|e| format!("创建输入数组失败: {}", e))?;
 
-            // 运行推理
-            let outputs = self.session.run(ort::inputs! {
-                "input_1": input_array
-            })?;
+            // 运行推理 - ort 2.0 语法：先转换为 Value，再用 => 连接
+            let input_value = ort::value::Value::from_array(&input_array)
+                .map_err(|e| format!("创建输入 Value 失败: {}", e))?;
+            let outputs = self.session.run(ort::inputs![
+                "input_1" => input_value
+            ])?;
 
             // 解析输出 [1, 3] -> [SIG_raw, BAK_raw, OVRL_raw]
             let output_tensor = outputs["Identity:0"].as_tensor()?;
