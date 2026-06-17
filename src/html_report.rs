@@ -181,7 +181,6 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-value {warping_class}">{warping_dur:.0}ms</div>
 <div class="card-hint">{warping_types_str}</div>
 </div>
-</div>
 <div class="card">
 <div class="card-label">频谱损伤</div>
 <div class="card-value {spectral_class}">{spectral_score_pct}%</div>
