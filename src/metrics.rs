@@ -53,21 +53,6 @@ pub struct DropoutEvent {
     pub attenuation_ratio: f64,
 }
 
-/// 时轴漂移事件（段时长被拉长/压缩）
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct WarpingEvent {
-    /// 涉及的段索引
-    pub segment_index: usize,
-    /// 参考音频该段时长 (ms)
-    pub ref_duration_ms: f64,
-    /// 录制音频该段实际时长 (ms)
-    pub deg_duration_ms: f64,
-    /// 漂移时长 = deg - ref (ms)，正值表示拉长/变慢，负值表示压缩/变快
-    pub drift_ms: f64,
-    /// 漂移比例 = drift_ms / ref_duration_ms
-    pub drift_ratio: f64,
-}
-
 /// 内容截断/裁剪事件（段实际长度明显短于参考）
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TruncationEvent {
@@ -372,74 +357,88 @@ pub fn detect_dropouts(
 // 维度二：时轴漂移检测 (Time Warping)
 // ============================================================
 
-/// 时轴漂移双重阈值（绝对 ms + 比例），同时满足才算漂移
-#[derive(Debug, Clone, Copy)]
-pub struct WarpingThreshold {
-    /// 绝对漂移阈值（ms）：drift_ms 超过此值才可能是漂移
-    pub abs_ms: f64,
-    /// 比例漂移阈值：drift_ratio 超过此值才可能是漂移
-    pub ratio: f64,
+/// 时轴漂移子类型
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq)]
+pub enum WarpingType {
+    /// 裁剪：内容缺失，前移
+    Cut,
+    /// 插入：内容重复/新增，后移
+    Insertion,
+    /// 拉伸：匀速变慢，后移
+    Stretch,
+    /// 压缩：匀速变快，前移
+    Compress,
 }
 
-impl Default for WarpingThreshold {
+impl WarpingType {
+    /// 获取子类型的中文描述
+    pub fn chinese(&self) -> &'static str {
+        match self {
+            WarpingType::Cut => "裁剪",
+            WarpingType::Insertion => "插入",
+            WarpingType::Stretch => "拉伸",
+            WarpingType::Compress => "压缩",
+        }
+    }
+}
+
+/// 漂移检测配置
+#[derive(Debug, Clone, Copy)]
+pub struct WarpingConfig {
+    /// 滑窗长度 (ms)
+    pub window_ms: f64,
+    /// 步进长度 (ms)
+    pub hop_ms: f64,
+    /// 搜索半径 (ms)
+    pub search_radius_ms: f64,
+    /// 静音阈值（RMS 低于此值判定为静音）
+    pub silence_threshold: f64,
+    /// 突变阈值 (ms)：相邻 offset 差超过此值判定为突变
+    pub jump_threshold_ms: f64,
+    /// 斜坡阈值：每秒漂移超过此值判定为渐变
+    pub slope_threshold: f64,
+    /// 最小漂移幅度 (ms)：drift_ms 绝对值需 >= 此值才报异常
+    pub min_drift_ms: f64,
+    /// 线性回归 R² 门槛：斜坡检测需要 R² >= 此值
+    pub min_r_squared: f64,
+}
+
+impl Default for WarpingConfig {
     fn default() -> Self {
         Self {
-            abs_ms: 200.0,  // 段间错位超过 200ms 才考虑
-            ratio: 0.05,    // 且相对基准间距偏差超过 5%
+            window_ms: 200.0,
+            hop_ms: 100.0,
+            search_radius_ms: 300.0,
+            silence_threshold: 0.005, // 复用中断检测的静音阈值
+            jump_threshold_ms: 80.0,
+            slope_threshold: 0.3, // 30ms/s
+            min_drift_ms: 60.0,
+            min_r_squared: 0.7,
         }
     }
 }
 
-/// 维度二：时轴漂移检测
-///
-/// 语义：检测**同一段音频内容在录制端的时长偏差**。
-/// 实际场景：网络抖动导致播放缓冲区将音频强制拉长（WSOLA 变慢）或压缩（变快）。
-///
-/// 检测原理：直接比较参考音频时长 vs 录制对应段的实际时长。
-/// - 正漂移（drift_ms > 0）：录制段比参考长，表示被拉长/变慢
-/// - 负漂移（drift_ms < 0）：录制段比参考短，表示被压缩/变快
-///
-/// 阈值：双重条件同时满足才判定为漂移
-/// - 绝对偏差 > abs_ms（如 100ms）
-/// - 相对偏差 > ratio（如 5%）
-///
-/// # Arguments
-/// * `seg_durations_s` - 各段录制音频的实际时长（秒）
-/// * `ref_duration_s` - 参考音频的时长（秒）
-/// * `threshold` - 双重阈值
-pub fn detect_warpings(
-    seg_durations_s: &[f64],
-    ref_duration_s: f64,
-    threshold: WarpingThreshold,
-) -> Vec<WarpingEvent> {
-    if seg_durations_s.is_empty() || ref_duration_s <= 0.0 {
-        return vec![];
+impl WarpingConfig {
+    /// 根据采样率创建默认配置
+    pub fn for_sample_rate(_sr: u32) -> Self {
+        // 参数已针对 16kHz 优化，音频模式可后续调参
+        Self::default()
     }
+}
 
-    let ref_ms = ref_duration_s * 1000.0;
-    // [DIAG] 漂移检测内部基准（核对与 main.rs DIAG 是否一致）
-    eprintln!("[DIAG] detect_warpings 内部: ref_duration_s={:.6}s → ref_ms={:.1}ms, 输入段数={}, 阈值 abs>{}ms && ratio>{}",
-              ref_duration_s, ref_ms, seg_durations_s.len(), threshold.abs_ms, threshold.ratio);
-    let mut events = Vec::new();
-
-    for (seg_idx, &deg_dur_s) in seg_durations_s.iter().enumerate() {
-        let deg_ms = deg_dur_s * 1000.0;
-        let drift_ms = deg_ms - ref_ms;
-        let drift_ratio = drift_ms / ref_ms;
-
-        // 双重阈值：绝对 ms 和比例同时超过才判定为漂移
-        if drift_ms.abs() > threshold.abs_ms && drift_ratio.abs() > threshold.ratio {
-            events.push(WarpingEvent {
-                segment_index: seg_idx,
-                ref_duration_ms: ref_ms,
-                deg_duration_ms: deg_ms,
-                drift_ms,
-                drift_ratio,
-            });
-        }
-    }
-
-    events
+/// 时轴漂移事件（重构后）
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WarpingEvent {
+    /// 涉及的段索引
+    pub segment_index: usize,
+    /// 漂移起始时间（秒，基于参考时间轴）
+    pub start_time_s: f64,
+    /// 漂移结束时间（秒，基于参考时间轴）
+    pub end_time_s: f64,
+    /// 总漂移幅度（ms，带符号：+后移，-前移）
+    pub drift_ms: f64,
+    /// 子类型标签
+    pub drift_type: WarpingType,
 }
 // ============================================================
 // 维度二补充：内容截断/裁剪检测 (Truncation)
@@ -576,7 +575,7 @@ pub fn detect_spectral_artifacts(
 #[allow(dead_code)]
 pub struct AnomalyDetectConfig {
     pub dropout_config: DropoutDetectorConfig,
-    pub warping_threshold: WarpingThreshold,
+    pub warping_config: WarpingConfig,
     pub artifact_threshold: f64,
     pub truncation_threshold: TruncationThreshold,
 }
@@ -585,7 +584,7 @@ impl Default for AnomalyDetectConfig {
     fn default() -> Self {
         Self {
             dropout_config: DropoutDetectorConfig::default(),
-            warping_threshold: WarpingThreshold::default(),
+            warping_config: WarpingConfig::default(),
             artifact_threshold: 0.4,
             truncation_threshold: TruncationThreshold::default(),
         }
@@ -598,19 +597,19 @@ pub fn detect_anomalies(
     reference: &[f64],
     degraded: &[f64],
     sample_rate: u32,
-    alignment_offsets_s: &[f64],
+    _alignment_offsets_s: &[f64],
     _ref_duration: f64,
     patch_sims: &[Vec<crate::visqol::PatchSimilarityResult>],
     config: &AnomalyDetectConfig,
 ) -> AudioAnomalyReport {
-    // 维度一：时域中断
+    // ���度一：时域中断
     let dropouts = detect_dropouts(reference, degraded, sample_rate, &config.dropout_config, 0);
     let dropout_duration_ms: f64 = dropouts.iter().map(|e| e.duration_ms).sum();
 
-    // 维度二：时轴漂移（段时长偏差）
-    let ref_dur_s = _ref_duration;
-    let warpings = detect_warpings(alignment_offsets_s, ref_dur_s, config.warping_threshold);
-    let warping_duration_ms: f64 = warpings.iter().map(|w| w.drift_ms.abs()).sum();
+    // 维度二：时轴漂移（现在由 main.rs 中的 time_warping 模块独立检测）
+    // 这里留空，由调用方单独填充
+    let warpings: Vec<WarpingEvent> = vec![];
+    let warping_duration_ms: f64 = 0.0;
 
     // 维度三：频谱损伤
     let (spectral_artifacts_score, spectral_artifacts) =

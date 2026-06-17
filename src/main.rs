@@ -12,6 +12,7 @@ mod metrics;
 mod visqol;
 mod report;
 mod html_report;
+mod time_warping;
 
 use clap::Parser;
 use std::fs;
@@ -311,27 +312,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 维度二：时轴漂移检测（在所有分段完成后）
-    // 直接比较每段录制时长 vs 参考时长，正值表示拉长，负值表示压缩
-    let warping_events = metrics::detect_warpings(
-        &seg_durations_s,
-        ref_duration,
-        metrics::WarpingThreshold::default(),
-    );
+    // 使用新的滑窗互相关 + 形态分析检测
+    let warping_config = metrics::WarpingConfig::for_sample_rate(ref_audio.sample_rate);
 
-    // [DIAG] 全局漂移检测诊断：所有段时长 + 阈值
-    {
-        let ref_ms = ref_duration * 1000.0;
-        let thr = metrics::WarpingThreshold::default();
-        println!("[DIAG] === 漂移检测汇总 === 基准 ref_duration={:.3}s ({:.0}ms), 阈值 abs>{}ms && ratio>{}",
-                 ref_duration, ref_ms, thr.abs_ms, thr.ratio);
-        for (i, &dur) in seg_durations_s.iter().enumerate() {
-            let drift_ms = dur * 1000.0 - ref_ms;
-            let drift_ratio = drift_ms / ref_ms;
-            let triggers = drift_ms.abs() > thr.abs_ms && drift_ratio.abs() > thr.ratio;
-            println!("[DIAG]    第{}段: seg_dur={:.3}s, drift={:+.1}ms ({:+.3}%) {}",
-                     i + 1, dur, drift_ms, drift_ratio * 100.0,
-                     if triggers { "→ 触发漂移" } else { "→ 未触发" });
-        }
+    // [DIAG] 漂移检测配置
+    eprintln!("[DIAG] === 漂移检测配置 === window={}ms, hop={}ms, search_radius={}ms, silence={}, jump={}ms, slope={}, min_drift={}ms, min_r2={}",
+              warping_config.window_ms, warping_config.hop_ms, warping_config.search_radius_ms,
+              warping_config.silence_threshold, warping_config.jump_threshold_ms,
+              warping_config.slope_threshold, warping_config.min_drift_ms, warping_config.min_r_squared);
+
+    let mut all_warping_events: Vec<metrics::WarpingEvent> = Vec::new();
+
+    // 对每段进行漂移检测
+    for (seg_idx, seg_align) in alignment_peaks.iter().enumerate() {
+        let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
+        let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
+
+        // 提取段数据并补零到参考长度
+        let mut seg_degraded = rec_audio.samples[seg_start..seg_end].to_vec();
+        seg_degraded.resize(ref_audio.samples.len(), 0.0);
+
+        // 阶段一：计算 offset 序列
+        let offsets = time_warping::compute_offset_series(
+            &ref_audio.samples,
+            &seg_degraded,
+            ref_audio.sample_rate,
+            &warping_config,
+        );
+
+        // 阶段二：从 offset 序列检测漂移事件
+        let seg_events = time_warping::detect_warpings_from_offsets(
+            &offsets,
+            ref_audio.sample_rate,
+            warping_config.hop_ms,
+            seg_idx,
+            &warping_config,
+        );
+
+        all_warping_events.extend(seg_events);
     }
 
     // 维度二补充：内容截断/裁剪检测
@@ -399,7 +417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 将时轴漂移和频谱损伤结果更新到每段报告中
     for (seg_idx, seg_result) in segment_results.iter_mut().enumerate() {
         // 合并时轴漂移事件到对应段
-        let seg_warpings: Vec<metrics::WarpingEvent> = warping_events.iter()
+        let seg_warpings: Vec<metrics::WarpingEvent> = all_warping_events.iter()
             .filter(|w| w.segment_index == seg_idx)
             .cloned()
             .collect();

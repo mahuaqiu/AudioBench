@@ -182,10 +182,15 @@ pub fn print_console_report(report: &EvaluationReport) {
                          seg.anomaly.dropout_duration_ms, seg.anomaly.dropouts.len());
             }
             if !seg.anomaly.warpings.is_empty() {
-                // 显示漂移时长，绝对值避免 -0ms
+                // 显示漂移时长和子类型
                 let warping_ms = seg.anomaly.warping_duration_ms.abs();
-                println!("    时轴漂移: {:.0}ms ({}次)", 
-                         warping_ms, seg.anomaly.warpings.len());
+                // 收集所有漂移子类型
+                let types: Vec<String> = seg.anomaly.warpings.iter()
+                    .map(|w| w.drift_type.chinese().to_string())
+                    .collect();
+                let type_str = types.join("/");
+                println!("    时轴漂移: {:.0}ms ({}, {}次)",
+                         warping_ms, type_str, seg.anomaly.warpings.len());
             }
             if seg.anomaly.truncation_duration_ms > 0.0 {
                 println!("    内容截断: {:.0}ms ({}次)", 

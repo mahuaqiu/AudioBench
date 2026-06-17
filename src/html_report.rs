@@ -536,8 +536,14 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
            if dropout_ms > 0.0 {
                parts.push(format!("中断{:.0}ms", dropout_ms.abs()));
            }
-           if warping_ms.abs() > 0.0 {
-               parts.push(format!("漂移{:.0}ms", warping_ms.abs()));
+           if !seg.anomaly.warpings.is_empty() {
+               // 显示漂移子类型：漂移Xms(类型1/类型2)
+               let ms = warping_ms.abs();
+               let types: Vec<String> = seg.anomaly.warpings.iter()
+                   .map(|w| w.drift_type.chinese().to_string())
+                   .collect();
+               let type_str = types.join("/");
+               parts.push(format!("漂移{:.0}ms({})", ms, type_str));
            }
            if truncation_ms.abs() > 0.0 {
                parts.push(format!("截断{:.0}ms", truncation_ms.abs()));
