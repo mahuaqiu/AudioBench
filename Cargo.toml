@@ -14,14 +14,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # DNSMOS ONNX 推理 - 仅 Windows 启用完整功能
-# Windows：使用 load-dynamic，DLL 编译时嵌入，运行时释放到临时目录
-# Mac/Linux：DNSMOS 功能不可用
 [target.'cfg(windows)'.dependencies]
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["ndarray", "api-24", "std", "load-dynamic"] }
-
-# Windows DLL 搜索路径需要
-[target.'cfg(windows)'.dependencies.libc]
-version = "0.2"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 [profile.release]
 opt-level = "s"

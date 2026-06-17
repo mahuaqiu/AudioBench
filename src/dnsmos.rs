@@ -64,7 +64,7 @@ mod windows_impl {
                     .chain(std::iter::once(0))
                     .collect();
                 unsafe {
-                    libc::SetDllDirectoryW(path_wide.as_ptr());
+                    windows::Win32::System::LibraryLoader::SetDllDirectoryW(path_wide.as_ptr());
                 }
             }
 
