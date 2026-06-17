@@ -47,6 +47,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
         .map(|s| s.quality.center_freq_bands.clone())
         .unwrap_or_default();
     let center_freq_json = serde_json::to_string(&center_freq_bands).unwrap_or("[]".to_string());
+    // 波形数据 JSON
+    let waveform_ref_json = serde_json::to_string(&report.waveform_ref).unwrap_or_else(|_| "{}".to_string());
+    let waveform_deg_json = serde_json::to_string(&report.waveform_deg).unwrap_or_else(|_| "{}".to_string());
+
 
    // 异常检测统计
    let total_dropout: f64 = report.segments.iter().map(|s| s.anomaly.dropout_duration_ms.abs()).sum();
@@ -140,6 +144,17 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
   .glossary dt{{font-weight:600;color:var(--text);margin-top:10px}}
   .glossary dd{{color:var(--text2);margin-left:0;margin-bottom:4px}}
   .tag{{display:inline-block;background:#ebf8ff;color:var(--accent);padding:2px 8px;border-radius:4px;font-size:12px;margin-right:6px}}
+  .waveform-section {{ background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:24px; }}
+  .waveform-title {{ font-size:16px; font-weight:600; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid var(--border); }}
+  .waveform-label {{ font-size:13px; color:var(--text2); margin-bottom:4px; font-weight:500; }}
+  .waveform-container {{ position:relative; width:100%; overflow-x:auto; overflow-y:hidden; cursor:grab; border:1px solid var(--border); border-radius:4px; background:#1a1a2e; margin-bottom:16px; }}
+  .waveform-container:active {{ cursor:grabbing; }}
+  .waveform-container canvas {{ display:block; }}
+  .waveform-time-axis {{ position:relative; height:20px; background:#f7fafc; border:1px solid var(--border); border-radius:4px; margin-bottom:8px; }}
+  .waveform-scrollbar {{ position:relative; height:10px; background:#e2e8f0; border-radius:5px; margin-top:4px; }}
+  .waveform-scrollbar-thumb {{ position:absolute; height:100%; background:var(--accent); border-radius:5px; min-width:30px; cursor:pointer; opacity:0.7; }}
+  .waveform-scrollbar-thumb:hover {{ opacity:1; }}
+
 </style>
 </head>
 <body>
@@ -195,6 +210,20 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="pagination" id="tablePagination"></div>
 </div>
 
+
+<div class="waveform-section" id="sectionWaveform">
+<div class="waveform-title">波形对比</div>
+<div class="waveform-label">参考音频</div>
+<div class="waveform-container" id="waveformRefContainer">
+<canvas id="waveformRef" height="120"></canvas>
+</div>
+<div class="waveform-label">录制音频</div>
+<div class="waveform-container" id="waveformDegContainer">
+<canvas id="waveformDeg" height="120"></canvas>
+</div>
+<div class="waveform-time-axis" id="waveformTimeAxis"></div>
+</div>
+
 <div class="section" id="sectionMos"><div class="section-title">MOS-LQO 分段趋势</div>
 <div class="chart-full"><canvas id="chartMos"></canvas></div>
 </div>
@@ -242,6 +271,169 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 
 <script>
 var REPORT = JSON.parse({report_json});
+
+var waveformRef = JSON.parse({waveform_ref_json});
+var waveformDeg = JSON.parse({waveform_deg_json});
+
+// 波形渲染器
+(function() {{
+  var WAVEFORM_HEIGHT = 120;
+  var PIXELS_PER_SECOND = 200;
+  var SCROLL_SYNC_GROUP = [];
+
+  function renderWaveform(canvasId, containerId, data, color) {{
+    if (!data || !data.pixel_count || data.pixel_count === 0) return;
+    
+    var canvas = document.getElementById(canvasId);
+    var container = document.getElementById(containerId);
+    if (!canvas || !container) return;
+    
+    var ctx = canvas.getContext('2d');
+    var pixelCount = data.pixel_count;
+    var dpr = window.devicePixelRatio || 1;
+    
+    // 画布宽度 = 像素点数，高度固定
+    var canvasWidth = pixelCount;
+    canvas.width = canvasWidth * dpr;
+    canvas.height = WAVEFORM_HEIGHT * dpr;
+    canvas.style.width = canvasWidth + 'px';
+    canvas.style.height = WAVEFORM_HEIGHT + 'px';
+    ctx.scale(dpr, dpr);
+    
+    var centerY = WAVEFORM_HEIGHT / 2;
+    var scale = centerY * 0.9; // 留一点边距
+    
+    // 背景渐变
+    var bgGrad = ctx.createLinearGradient(0, 0, 0, WAVEFORM_HEIGHT);
+    bgGrad.addColorStop(0, '#1a1a2e');
+    bgGrad.addColorStop(0.5, '#16213e');
+    bgGrad.addColorStop(1, '#1a1a2e');
+    ctx.fillStyle = bgGrad;
+    ctx.fillRect(0, 0, canvasWidth, WAVEFORM_HEIGHT);
+    
+    // 中心线
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, centerY);
+    ctx.lineTo(canvasWidth, centerY);
+    ctx.stroke();
+    
+    // 绘制波形（min/max 填充）
+    ctx.fillStyle = color;
+    for (var i = 0; i < pixelCount; i++) {{
+      var minVal = data.min_values[i];
+      var maxVal = data.max_values[i];
+      var y1 = centerY - maxVal * scale;
+      var y2 = centerY - minVal * scale;
+      // 确保至少 1px 高度（静音区域）
+      if (Math.abs(y2 - y1) < 0.5) {{
+        y1 = centerY - 0.5;
+        y2 = centerY + 0.5;
+      }}
+      ctx.fillRect(i, y1, 1, y2 - y1);
+    }}
+    
+    // 时间刻度（每秒一条竖线）
+    var samplesPerPixel = data.samples_per_pixel;
+    var duration = data.duration_s;
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    for (var t = 1; t < Math.ceil(duration); t++) {{
+      var x = Math.round(t * PIXELS_PER_SECOND);
+      if (x >= canvasWidth) break;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, WAVEFORM_HEIGHT);
+      ctx.stroke();
+      ctx.fillText(t + 's', x, 10);
+    }}
+    
+    // 拖拽滚动
+    SCROLL_SYNC_GROUP.push(containerId);
+    setupDragScroll(container, canvasId);
+  }}
+  
+  function setupDragScroll(container, canvasId) {{
+    var isDragging = false;
+    var startX = 0;
+    var scrollLeft = 0;
+    
+    container.addEventListener('mousedown', function(e) {{
+      isDragging = true;
+      startX = e.pageX - container.offsetLeft;
+      scrollLeft = container.scrollLeft;
+      container.style.cursor = 'grabbing';
+      e.preventDefault();
+    }});
+    
+    container.addEventListener('mousemove', function(e) {{
+      if (!isDragging) return;
+      var x = e.pageX - container.offsetLeft;
+      var walk = (x - startX) * 1.5;
+      var newScroll = scrollLeft - walk;
+      container.scrollLeft = newScroll;
+      // 同步其他波形容器
+      SCROLL_SYNC_GROUP.forEach(function(id) {{
+        if (id !== container.id) {{
+          document.getElementById(id).scrollLeft = newScroll;
+        }}
+      }});
+    }});
+    
+    container.addEventListener('mouseup', function() {{
+      isDragging = false;
+      container.style.cursor = 'grab';
+    }});
+    
+    container.addEventListener('mouseleave', function() {{
+      isDragging = false;
+      container.style.cursor = 'grab';
+    }});
+    
+    // 滚轮水平滚动（支持鼠标滚轮）
+    container.addEventListener('wheel', function(e) {{
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {{
+        e.preventDefault();
+        var newScroll = container.scrollLeft + e.deltaY;
+        container.scrollLeft = newScroll;
+        SCROLL_SYNC_GROUP.forEach(function(id) {{
+          if (id !== container.id) {{
+            document.getElementById(id).scrollLeft = newScroll;
+          }}
+        }});
+      }}
+    }}, {{ passive: false }});
+    
+    // 触摸拖拽支持
+    var touchStartX = 0;
+    var touchScrollLeft = 0;
+    container.addEventListener('touchstart', function(e) {{
+      touchStartX = e.touches[0].pageX;
+      touchScrollLeft = container.scrollLeft;
+    }}, {{ passive: true }});
+    
+    container.addEventListener('touchmove', function(e) {{
+      var x = e.touches[0].pageX;
+      var walk = (touchStartX - x) * 1.5;
+      var newScroll = touchScrollLeft + walk;
+      container.scrollLeft = newScroll;
+      SCROLL_SYNC_GROUP.forEach(function(id) {{
+        if (id !== container.id) {{
+          document.getElementById(id).scrollLeft = newScroll;
+        }}
+      }});
+    }}, {{ passive: true }});
+  }}
+  
+  // 渲染两个波形
+  renderWaveform('waveformRef', 'waveformRefContainer', waveformRef, 'rgba(49,130,206,0.7)');
+  renderWaveform('waveformDeg', 'waveformDegContainer', waveformDeg, 'rgba(229,62,62,0.7)');
+}})();
+
+
 var segLabels = JSON.parse({seg_labels_json});
 var mosValues = JSON.parse({mos_values_json});
 var vnsimValues = JSON.parse({vnsim_values_json});
@@ -502,6 +694,8 @@ function multiSegLegend(segCount) {{
         energy_json = to_js_str(&energy_json),
         patch_json = to_js_str(&patch_json),
         center_freq_json = to_js_str(&center_freq_json),
+        waveform_ref_json = to_js_str(&waveform_ref_json),
+        waveform_deg_json = to_js_str(&waveform_deg_json),
         table_rows = table_rows,
     )
 }

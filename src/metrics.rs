@@ -440,6 +440,7 @@ pub struct WarpingEvent {
 
 /// 内容截断检测参数
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 pub struct TruncationThreshold {
     /// 最短截断时长 (ms)：段实际长度比参考短超过此值才报截断
     pub min_truncation_ms: f64,
@@ -469,6 +470,7 @@ impl Default for TruncationThreshold {
 /// * `ref_samples` - 参考音频总样本数
 /// * `sample_rate` - 采样率
 /// * `threshold` - 阈值
+#[allow(dead_code)]
 pub fn detect_truncation(
     seg_actual_samples: &[usize],
     ref_samples: usize,
@@ -611,7 +613,7 @@ pub fn detect_anomalies(
 
     // 维度二补充：内容截断（这里无法获得各段实际长度，留空，由调用方单独填充）
     let truncations: Vec<TruncationEvent> = vec![];
-    let truncation_duration_ms: f64 = 0.0;
+    let _truncation_duration_ms: f64 = 0.0;
 
     let has_anomaly = !dropouts.is_empty()
         || !warpings.is_empty()

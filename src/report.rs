@@ -57,6 +57,25 @@ pub struct EvaluationReport {
     pub recorded_duration_s: f64,
     pub overall: OverallStats,
     pub segments: Vec<SegmentResult>,
+    /// 参考音频波形数据（降采样后）
+    pub waveform_ref: WaveformData,
+    /// 录制音频波形数据（降采样后）
+    pub waveform_deg: WaveformData,
+}
+
+/// 波形数据（降采样后用于 HTML 渲染）
+#[derive(Debug, Serialize)]
+pub struct WaveformData {
+    /// 每个像素点对应的采样数
+    pub samples_per_pixel: usize,
+    /// 总像素点数
+    pub pixel_count: usize,
+    /// 音频时长（秒）
+    pub duration_s: f64,
+    /// 最小值数组
+    pub min_values: Vec<f32>,
+    /// 最大值数组
+    pub max_values: Vec<f32>,
 }
 
 /// 生成完整评估报告
@@ -66,6 +85,8 @@ pub fn generate_report(
     ref_duration: f64,
     rec_duration: f64,
     segments: Vec<SegmentResult>,
+    waveform_ref: WaveformData,
+    waveform_deg: WaveformData,
 ) -> EvaluationReport {
     let overall = compute_overall_stats(&segments);
     EvaluationReport {
@@ -75,6 +96,8 @@ pub fn generate_report(
         recorded_duration_s: rec_duration,
         overall,
         segments,
+        waveform_ref,
+        waveform_deg,
     }
 }
 

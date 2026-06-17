@@ -82,6 +82,47 @@ fn find_actual_audio_end(samples: &[f64], sample_rate: u32) -> usize {
 }
 
 
+
+/// 对音频采样数据进行降采样，生成波形绘制数据
+/// 每个像素点对应一组采样的最小值和最大值（类似 Audacity 的 min/max 波形）
+fn downsample_waveform(samples: &[f64], sample_rate: u32, target_pixels: usize) -> report::WaveformData {
+    if samples.is_empty() || target_pixels == 0 {
+        return report::WaveformData {
+            samples_per_pixel: 1,
+            pixel_count: 0,
+            duration_s: 0.0,
+            min_values: vec![],
+            max_values: vec![],
+        };
+    }
+    
+    let duration_s = samples.len() as f64 / sample_rate as f64;
+    // 每像素对应的采样数，向上取整确保覆盖所有数据
+    let samples_per_pixel = (samples.len() + target_pixels - 1) / target_pixels;
+    let pixel_count = (samples.len() + samples_per_pixel - 1) / samples_per_pixel;
+    
+    let mut min_values = Vec::with_capacity(pixel_count);
+    let mut max_values = Vec::with_capacity(pixel_count);
+    
+    for i in 0..pixel_count {
+        let start = i * samples_per_pixel;
+        let end = ((i + 1) * samples_per_pixel).min(samples.len());
+        let chunk = &samples[start..end];
+        let min_val = chunk.iter().cloned().fold(f64::INFINITY, f64::min) as f32;
+        let max_val = chunk.iter().cloned().fold(f64::NEG_INFINITY, f64::max) as f32;
+        min_values.push(min_val);
+        max_values.push(max_val);
+    }
+    
+    report::WaveformData {
+        samples_per_pixel,
+        pixel_count,
+        duration_s,
+        min_values,
+        max_values,
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
@@ -433,6 +474,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         confidence: 0.0,
     });
     
+
+    // 生成波形数据（用于 HTML 报告中的波形图）
+    // 目标：每秒约 200 个像素点，足够展示细节
+    let waveform_ref = downsample_waveform(&ref_audio.samples, ref_audio.sample_rate, (ref_duration * 200.0) as usize);
+    let waveform_deg = downsample_waveform(&rec_audio.samples, ref_audio.sample_rate, (rec_duration * 200.0) as usize);
+    
     // 生成报告
     let report = report::generate_report(
         report::ReportConfig {
@@ -448,6 +495,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ref_duration,
         rec_duration,
         segment_results,
+        waveform_ref,
+        waveform_deg,
     );
     
     // 输出控制台报告
