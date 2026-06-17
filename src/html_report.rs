@@ -216,17 +216,17 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-hint">低相似度片段比例</div>
 </div>
 <div class="card">
-<div class="card-label">DNSMOS-SIG (Signal MOS)</div>
+<div class="card-label">Signal MOS</div>
 <div class="card-value {sig_class}">{sig_mean:.2}</div>
 <div class="card-hint">人声信号分（1-5），值越高越好</div>
 </div>
 <div class="card">
-<div class="card-label">DNSMOS-BAK (Background MOS)</div>
+<div class="card-label">Background MOS</div>
 <div class="card-value {bak_class}">{bak_mean:.2}</div>
 <div class="card-hint">背景噪声分（1-5），值越高越好</div>
 </div>
 <div class="card">
-<div class="card-label">DNSMOS-OVRL (Overall MOS)</div>
+<div class="card-label">Overall MOS</div>
 <div class="card-value {ovrl_class}">{ovrl_mean:.2}</div>
 <div class="card-hint">整体综合分（1-5），值越高越好</div>
 </div>
