@@ -13,8 +13,8 @@ rustfft = "6.4.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# DNSMOS ONNX 推理 - 使用 ort 绑定 ONNX Runtime
-ort = { version = "2.0.0-rc.12", features = ["static"] }
+# DNSMOS ONNX 推理 - 禁用自动下载，使用本地 DLL
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["ndarray", "api-24"] }
 ndarray = "0.16"
 
 [profile.release]
