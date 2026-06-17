@@ -147,7 +147,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
   .waveform-section {{ background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:24px; }}
   .waveform-title {{ font-size:16px; font-weight:600; margin-bottom:12px; padding-bottom:8px; border-bottom:1px solid var(--border); }}
   .waveform-label {{ font-size:13px; color:var(--text2); margin-bottom:4px; font-weight:500; }}
-  .waveform-container {{ position:relative; width:100%; overflow-x:auto; overflow-y:hidden; cursor:grab; border:1px solid var(--border); border-radius:4px; background:#1a1a2e; margin-bottom:16px; }}
+  .waveform-container {{ position:relative; width:100%; overflow-x:auto; overflow-y:hidden; cursor:grab; border:1px solid var(--border); border-radius:4px; background:#ffffff; margin-bottom:16px; }}
   .waveform-container:active {{ cursor:grabbing; }}
   .waveform-container canvas {{ display:block; }}
   .waveform-time-axis {{ position:relative; height:20px; background:#f7fafc; border:1px solid var(--border); border-radius:4px; margin-bottom:8px; }}
@@ -278,7 +278,7 @@ var waveformDeg = JSON.parse({waveform_deg_json});
 // 波形渲染器
 (function() {{
   var WAVEFORM_HEIGHT = 120;
-  var PIXELS_PER_SECOND = 200;
+  var PIXELS_PER_SECOND = 100;
   var SCROLL_SYNC_GROUP = [];
 
   function renderWaveform(canvasId, containerId, data, color) {{
@@ -304,15 +304,11 @@ var waveformDeg = JSON.parse({waveform_deg_json});
     var scale = centerY * 0.9; // 留一点边距
     
     // 背景渐变
-    var bgGrad = ctx.createLinearGradient(0, 0, 0, WAVEFORM_HEIGHT);
-    bgGrad.addColorStop(0, '#1a1a2e');
-    bgGrad.addColorStop(0.5, '#16213e');
-    bgGrad.addColorStop(1, '#1a1a2e');
-    ctx.fillStyle = bgGrad;
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, canvasWidth, WAVEFORM_HEIGHT);
     
     // 中心线
-    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.1)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, centerY);
@@ -337,8 +333,8 @@ var waveformDeg = JSON.parse({waveform_deg_json});
     // 时间刻度（每秒一条竖线）
     var samplesPerPixel = data.samples_per_pixel;
     var duration = data.duration_s;
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
     for (var t = 1; t < Math.ceil(duration); t++) {{
@@ -429,8 +425,8 @@ var waveformDeg = JSON.parse({waveform_deg_json});
   }}
   
   // 渲染两个波形
-  renderWaveform('waveformRef', 'waveformRefContainer', waveformRef, 'rgba(49,130,206,0.7)');
-  renderWaveform('waveformDeg', 'waveformDegContainer', waveformDeg, 'rgba(229,62,62,0.7)');
+  renderWaveform('waveformRef', 'waveformRefContainer', waveformRef, '#3182ce');
+  renderWaveform('waveformDeg', 'waveformDegContainer', waveformDeg, '#e53e3e');
 }})();
 
 
