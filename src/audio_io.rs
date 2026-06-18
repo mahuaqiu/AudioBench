@@ -11,6 +11,7 @@ const FIR_FILTER_ORDER: usize = 127;
 /// 设计加窗 sinc 低通滤波器（线性相位 FIR）
 ///
 /// 截止频率 `cutoff_hz`，采样率 `sample_rate`，返回长度 = order 的对称 FIR 系数。
+#[allow(clippy::needless_range_loop)]
 fn design_lowpass_fir(cutoff_hz: f64, sample_rate: f64, order: usize) -> Vec<f64> {
     let mut h = vec![0.0; order];
     let mid = (order as f64 - 1.0) / 2.0;
@@ -43,6 +44,7 @@ fn design_lowpass_fir(cutoff_hz: f64, sample_rate: f64, order: usize) -> Vec<f64
 }
 
 /// 对信号做 FFT 卷积（重叠保留风格：补零到 FFT 大小，频域相乘，反变换）
+#[allow(clippy::needless_range_loop)]
 fn apply_fir_filter(samples: &[f64], fir: &[f64]) -> Vec<f64> {
     if samples.is_empty() {
         return vec![];

@@ -511,6 +511,7 @@ pub fn detect_truncation(
 /// * `patch_sims` - 各段的 patch 相似度列表
 /// * `artifact_threshold` - 相似度低于此值判为损伤 patch
 /// * `exclude_edge_patches` - 是否排除每段的首尾 patch（边界效应：补零/能量过渡）
+#[allow(clippy::needless_range_loop)]
 pub fn detect_spectral_artifacts(
     patch_sims: &[Vec<crate::visqol::PatchSimilarityResult>],
     artifact_threshold: f64,

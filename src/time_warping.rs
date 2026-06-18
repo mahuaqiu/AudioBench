@@ -120,7 +120,7 @@ pub fn compute_offset_series(
             search_radius_samples,
         ) {
             // 转换为 ms
-            let offset_ms = offset_samples as f64 / sample_rate as f64 * 1000.0;
+            let offset_ms = offset_samples / sample_rate as f64 * 1000.0;
             offsets.push(Some(offset_ms));
         } else {
             offsets.push(None);

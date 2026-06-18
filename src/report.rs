@@ -169,9 +169,9 @@ pub fn print_console_report(report: &EvaluationReport) {
     println!("  录制音频: {}", report.config.recorded_path);
     println!("  参考时长: {:.2}s, 录制时长: {:.2}s", 
              report.reference_duration_s, report.recorded_duration_s);
-    println!("  采样率: {} Hz, 模式: {}", 
+    println!("  采样率: {} Hz, 模式: {}",
              report.config.target_sample_rate,
-             format!("{} Hz", report.config.target_sample_rate));
+             if report.config.target_sample_rate == 16000 { "语音" } else { "音频" });
 
     println!("\n【时间对齐】");
     println!("  传输延迟: {:.1} ms", report.alignment.delay_ms);

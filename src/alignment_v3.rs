@@ -394,7 +394,7 @@ pub fn find_all_alignments_v3(
     let mut deduped = Vec::new();
     for r in results {
         let too_close = deduped.iter().any(|existing: &AlignmentResult| {
-            ((r.offset_samples as isize - existing.offset_samples as isize).unsigned_abs() as usize) < min_gap
+            (r.offset_samples as isize - existing.offset_samples as isize).unsigned_abs() < min_gap
         });
         if !too_close {
             deduped.push(r);

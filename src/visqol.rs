@@ -269,13 +269,12 @@ fn parse_csv_results(csv_path: &Path) -> Result<VisqolResult, String> {
                     fstdnsim.push(v);
                 }
             }
-        } else if h.starts_with("fvdegenergy") {
-            if i < values.len() {
+        } else if h.starts_with("fvdegenergy")
+            && i < values.len() {
                 if let Ok(v) = values[i].trim().parse::<f64>() {
                     fvdegenergy.push(v);
                 }
             }
-        }
     }
 
     // VNSIM 是 fvnsim 的均值

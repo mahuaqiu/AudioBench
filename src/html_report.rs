@@ -24,12 +24,12 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     // fVNSIM 数据
     // fVNSIM 数据（取全部，不限制32个）
     let fvnsim_data: Vec<Vec<f64>> = report.segments.iter()
-        .map(|seg| seg.quality.fvnsim.iter().cloned().collect())
+        .map(|seg| seg.quality.fvnsim.to_vec())
         .collect();
 
     // 频段能量比（取全部，不限制32个）
     let energy_data: Vec<Vec<f64>> = report.segments.iter()
-        .map(|seg| seg.band_energy_ratios.iter().cloned().collect())
+        .map(|seg| seg.band_energy_ratios.to_vec())
         .collect();
 
     // Patch 相似度
@@ -319,7 +319,7 @@ var waveformDeg = JSON.parse({waveform_deg_json});
 // 波形渲染器
 (function() {{
   var WAVEFORM_HEIGHT = 120;
-  var PIXELS_PER_SECOND = 200;
+  var PIXELS_PER_SECOND = 60;
   var SCROLL_SYNC_GROUP = [];
 
   function renderWaveform(canvasId, containerId, data, color) {{
@@ -807,7 +807,7 @@ fn days_to_ymd(mut days: u64) -> (u32, u32, u32) {
 }
 
 fn is_leap_year(year: u32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 fn generate_table_rows(report: &EvaluationReport) -> String {

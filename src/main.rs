@@ -98,8 +98,8 @@ fn downsample_waveform(samples: &[f64], sample_rate: u32, target_pixels: usize) 
     
     let duration_s = samples.len() as f64 / sample_rate as f64;
     // 每像素对应的采样数，向上取整确保覆盖所有数据
-    let samples_per_pixel = (samples.len() + target_pixels - 1) / target_pixels;
-    let pixel_count = (samples.len() + samples_per_pixel - 1) / samples_per_pixel;
+    let samples_per_pixel = samples.len().div_ceil(target_pixels);
+    let pixel_count = samples.len().div_ceil(samples_per_pixel);
     
     let mut min_values = Vec::with_capacity(pixel_count);
     let mut max_values = Vec::with_capacity(pixel_count);
@@ -353,7 +353,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             segment_index: seg_idx,
             start_time_s: seg_start_time,
             end_time_s: seg_end_time,
-            quality: visqol_result.into(),
+            quality: visqol_result,
             anomaly,
             level_ref,
             level_deg,
@@ -455,9 +455,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
 
     // 生成波形数据（用于 HTML 报告中的波形图）
-    // 目标：每秒约 200 个像素点，足够展示细节
-    let waveform_ref = downsample_waveform(&ref_audio.samples, ref_audio.sample_rate, (ref_duration * 200.0) as usize);
-    let waveform_deg = downsample_waveform(&rec_audio.samples, ref_audio.sample_rate, (rec_duration * 200.0) as usize);
+    // 目标：每秒约 60 个像素点
+    let waveform_ref = downsample_waveform(&ref_audio.samples, ref_audio.sample_rate, (ref_duration * 60.0) as usize);
+    let waveform_deg = downsample_waveform(&rec_audio.samples, ref_audio.sample_rate, (rec_duration * 60.0) as usize);
     
     // 生成报告
     let report = report::generate_report(
