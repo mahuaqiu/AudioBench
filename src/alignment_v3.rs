@@ -350,10 +350,11 @@ pub fn find_all_alignments_v3(
 
                 if deg_voice_start >= v_start {
                     let absolute_start = deg_voice_start - v_start;
-                    let absolute_end = absolute_start + reference.len();
+                    let absolute_end = (absolute_start + reference.len()).min(degraded.len());
 
-                    println!("      绝对坐标: start={}, end={}, deg_len={}, ref_len={}",
-                             absolute_start, absolute_end, degraded.len(), reference.len());
+                    println!("      绝对坐标: start={}, end={}, 裁剪后={}, deg_len={}, ref_len={}",
+                             absolute_start, absolute_start + reference.len(),
+                             absolute_end, degraded.len(), reference.len());
 
                     if absolute_end <= degraded.len() {
                         println!("      ✅ 条件通过，进入置信度计算...");
