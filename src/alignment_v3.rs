@@ -344,6 +344,8 @@ pub fn find_all_alignments_v3(
 
                 // 4. 【自适应单块反推核心】：从有声起点往前倒退前静音长度
                 // 得到整段的绝对对齐切片起点
+                println!("      检查: deg_voice_start={}, v_start={}", deg_voice_start, v_start);
+
                 if deg_voice_start >= v_start {
                     let absolute_start = deg_voice_start - v_start;
                     let absolute_end = absolute_start + reference.len();
