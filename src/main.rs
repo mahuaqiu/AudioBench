@@ -159,9 +159,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let mode_name = if args.audio { "音频模式" } else { "语音模式" };
     println!("[*] ViSQOL 模式: {}Hz ({})", target_rate, mode_name);
+
+    // [DIAG] 处理损伤诊断：记录原始 WAV 的采样率/峰值/RMS，对比重采样后
+    {
+        fn rms(s: &[f64]) -> f64 {
+            if s.is_empty() { return 0.0; }
+            (s.iter().map(|&x| x * x).sum::<f64>() / s.len() as f64).sqrt()
+        }
+        fn peak(s: &[f64]) -> f64 { s.iter().map(|&x| x.abs()).fold(0.0f64, f64::max) }
+        let r = audio_io::AudioData::from_wav(&args.reference)?;
+        println!("[DIAG][处理损伤] 参考 原始采样率={}Hz, 样本数={}, 峰值={:.5}, RMS={:.5}",
+                 r.sample_rate, r.samples.len(), peak(&r.samples), rms(&r.samples));
+    }
+
     // 重采样到 ViSQOL 所需采样率
     let ref_audio = ref_audio.resample(target_rate)?;
     let rec_audio = rec_audio.resample(target_rate)?;
+
+    // [DIAG] 重采样后诊断：采样率、长度、RMS/峰值对比，判断是否发生重采样损伤
+    {
+        fn rms(s: &[f64]) -> f64 {
+            if s.is_empty() { return 0.0; }
+            (s.iter().map(|&x| x * x).sum::<f64>() / s.len() as f64).sqrt()
+        }
+        fn peak(s: &[f64]) -> f64 { s.iter().map(|&x| x.abs()).fold(0.0f64, f64::max) }
+        println!("[DIAG][处理损伤] 参考 重采样后={}Hz, 样本数={}, 峰值={:.5}, RMS={:.5}",
+                 ref_audio.sample_rate, ref_audio.samples.len(), peak(&ref_audio.samples), rms(&ref_audio.samples));
+        println!("[DIAG][处理损伤] 提示: 若重采样前后采样率不同，FIR低通+线性插值会引入损伤；若峰值接近1.0，int16 量化前可能已发生削波。");
+    }
 
     let ref_duration = ref_audio.duration_secs();
     let rec_duration = rec_audio.duration_secs();
@@ -224,15 +249,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
         let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
 
-        // [DIAG] 偏移网格搜索：在当前对齐点附近做 ±N samples 微调，
-        // 找到 MOS 最高的偏移。用于区分「对齐误差」vs「处理损伤」。
+        // [DIAG] 偏移网格搜索：只在第 1 段执行（避免多段循环卡死），
+        // 在当前对齐点附近做 ±N samples 微调，找到 MOS 最高的偏移。
+        // 用于区分「对齐误差」vs「处理损伤」：
         // - 若最优点 ≠ 当前点且 MOS 明显更高 → 对齐精度问题（根因 A/B/C）
         // - 若最优点 = 当前点，但 MOS 仍远低于 visqol 原生 ref-vs-ref → 处理损伤（重采样/int16/补零）
-        {
+        if seg_idx == 0 {
             let sr = ref_audio.sample_rate;
             let ref_len = ref_audio.samples.len();
-            // 搜索范围 ±20ms，步长 1ms（足够覆盖帧对齐误差，又不太慢）
-            let search_ms: i32 = 20;
+            // 搜索范围 ±15ms，步长 1ms（足够覆盖帧对齐误差，又不太慢）
+            let search_ms: i32 = 15;
             let step_ms: i32 = 1;
             let search_samples = (sr as f64 * search_ms as f64 / 1000.0) as i32;
             let step_samples = (sr as f64 * step_ms as f64 / 1000.0).max(1.0) as usize;
@@ -248,6 +274,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      seg_idx + 1, search_ms, step_ms, seg_start);
 
             let mut best = (f64::NEG_INFINITY, 0i64); // (mos, delta_samples)
+            let mut cur_mos = f64::NAN;
             let mut results_line = String::new();
             let mut count = 0;
             for delta in (-search_samples..=search_samples).step_by(step_samples) {
@@ -263,6 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match visqol::evaluate_with_visqol(&ref_temp, &deg_temp, mode) {
                     Ok(r) => {
                         let delta_ms = delta as f64 * 1000.0 / sr as f64;
+                        if delta == 0 { cur_mos = r.moslqo; }
                         results_line.push_str(&format!(" {:+.0}ms={:.3}", delta_ms, r.moslqo));
                         count += 1;
                         if r.moslqo > best.0 {
@@ -276,13 +304,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let best_delta_ms = best.1 as f64 * 1000.0 / sr as f64;
             println!("[DIAG] 第{}段 网格结果(共{}点):{}", seg_idx + 1, count, results_line);
-            // 从结果行里抓出 delta=0 的 MOS 作为「当前对齐 MOS」基准
-            // 简化：直接重新调用一次当前对齐
+            println!("[DIAG] 第{}段 当前(0ms)={:.3}, 最优 MOS={:.3} @ delta={:+.0}ms, 提升={:+.3}",
+                     seg_idx + 1, cur_mos, best.0, best_delta_ms, best.0 - cur_mos);
             let _ = fs::remove_file(&ref_temp);
             let _ = fs::remove_file(&deg_temp);
-            println!("[DIAG] 第{}段 最优 MOS={:.3} @ delta={:+.0}ms (seg_start={} → {})",
-                     seg_idx + 1, best.0, best_delta_ms, seg_start,
-                     (seg_start as i64 + best.1) as usize);
         }
 
        // 收集对齐偏移（秒）
