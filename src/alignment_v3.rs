@@ -231,6 +231,8 @@ fn compute_envelope_correlation(
     deg_audio: &[f64],
     sample_rate: usize,
 ) -> f64 {
+    println!("         [CORR] 调用: ref_len={}, deg_len={}", ref_audio.len(), deg_audio.len());
+
     let window_size = (0.010 * sample_rate as f64) as usize;
     let ref_env = compute_rms_envelope(ref_audio, window_size);
     let deg_env = compute_rms_envelope(deg_audio, window_size);
@@ -238,14 +240,14 @@ fn compute_envelope_correlation(
     println!("         [CORR] ref_env={}, deg_env={}", ref_env.len(), deg_env.len());
 
     if ref_env.is_empty() || deg_env.is_empty() {
-        println!("         [CORR] empty envelope, return 0");
+        println!("         [CORR] 空包络，返回 0");
         return 0.0;
     }
 
     // 取等长部分
     let min_len = ref_env.len().min(deg_env.len());
     if min_len == 0 {
-        println!("         [CORR] min_len=0, return 0");
+        println!("         [CORR] min_len=0，返回 0");
         return 0.0;
     }
 
@@ -264,7 +266,7 @@ fn compute_envelope_correlation(
     let deg_std = deg_var.sqrt();
 
     if ref_std < 1e-10 || deg_std < 1e-10 {
-        println!("         [CORR] std too small, return 0");
+        println!("         [CORR] 标准差过小，返回 0");
         return 0.0;
     }
 
@@ -276,7 +278,7 @@ fn compute_envelope_correlation(
     correlation /= min_len as f64 * ref_std * deg_std;
 
     let result = correlation.clamp(0.0, 1.0);
-    println!("         [CORR] result={:.4}", result);
+    println!("         [CORR] 最终结果: {:.4}", result);
     result
 }
 
@@ -350,10 +352,11 @@ pub fn find_all_alignments_v3(
                     let absolute_start = deg_voice_start - v_start;
                     let absolute_end = absolute_start + reference.len();
 
-                    println!("      绝对坐标: start={}, end={}, deg_len={}", absolute_start, absolute_end, degraded.len());
+                    println!("      绝对坐标: start={}, end={}, deg_len={}, ref_len={}",
+                             absolute_start, absolute_end, degraded.len(), reference.len());
 
                     if absolute_end <= degraded.len() {
-                        println!("      进入置信度计算...");
+                        println!("      ✅ 条件通过，进入置信度计算...");
                         // 5. 计算置信度（归一化互相关）
                         let confidence = compute_envelope_correlation(
                             pure_voice_ref,
@@ -386,7 +389,11 @@ pub fn find_all_alignments_v3(
                         } else {
                             println!("      ❌ 置信度 {:.3} < {:.3}", final_confidence, confidence_threshold);
                         }
+                    } else {
+                        println!("      ❌ absolute_end {} > degraded.len() {}", absolute_end, degraded.len());
                     }
+                } else {
+                    println!("      ❌ deg_voice_start {} < v_start {}", deg_voice_start, v_start);
                 }
             }
             None => {
