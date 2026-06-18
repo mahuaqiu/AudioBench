@@ -224,6 +224,67 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
         let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
 
+        // [DIAG] 偏移网格搜索：在当前对齐点附近做 ±N samples 微调，
+        // 找到 MOS 最高的偏移。用于区分「对齐误差」vs「处理损伤」。
+        // - 若最优点 ≠ 当前点且 MOS 明显更高 → 对齐精度问题（根因 A/B/C）
+        // - 若最优点 = 当前点，但 MOS 仍远低于 visqol 原生 ref-vs-ref → 处理损伤（重采样/int16/补零）
+        {
+            let sr = ref_audio.sample_rate;
+            let ref_len = ref_audio.samples.len();
+            // 搜索范围 ±20ms，步长 1ms（足够覆盖帧对齐误差，又不太慢）
+            let search_ms: i32 = 20;
+            let step_ms: i32 = 1;
+            let search_samples = (sr as f64 * search_ms as f64 / 1000.0) as i32;
+            let step_samples = (sr as f64 * step_ms as f64 / 1000.0).max(1.0) as usize;
+
+            // 临时文件复用
+            let temp_dir = std::env::temp_dir().join("audiobench");
+            fs::create_dir_all(&temp_dir)?;
+            let ref_temp = temp_dir.join("ref_grid.wav");
+            let deg_temp = temp_dir.join("deg_grid.wav");
+            audio_io::write_wav_mono(&ref_temp, &ref_audio.samples, sr)?;
+
+            println!("[DIAG] 第{}段 === 偏移网格搜索 === 范围 ±{}ms, 步长 {}ms, 当前对齐 seg_start={}",
+                     seg_idx + 1, search_ms, step_ms, seg_start);
+
+            let mut best = (f64::NEG_INFINITY, 0i64); // (mos, delta_samples)
+            let mut results_line = String::new();
+            let mut count = 0;
+            for delta in (-search_samples..=search_samples).step_by(step_samples) {
+                let try_start = seg_start as i64 + delta as i64;
+                if try_start < 0 || (try_start as usize) + ref_len > rec_audio.samples.len() {
+                    continue;
+                }
+                let try_start = try_start as usize;
+                let try_end = try_start + ref_len;
+                let mut seg_deg = rec_audio.samples[try_start..try_end].to_vec();
+                seg_deg.resize(ref_len, 0.0);
+                audio_io::write_wav_mono(&deg_temp, &seg_deg, sr)?;
+                match visqol::evaluate_with_visqol(&ref_temp, &deg_temp, mode) {
+                    Ok(r) => {
+                        let delta_ms = delta as f64 * 1000.0 / sr as f64;
+                        results_line.push_str(&format!(" {:+.0}ms={:.3}", delta_ms, r.moslqo));
+                        count += 1;
+                        if r.moslqo > best.0 {
+                            best = (r.moslqo, delta as i64);
+                        }
+                    }
+                    Err(e) => {
+                        println!("[DIAG]    delta={} 调用失败: {}", delta, e);
+                    }
+                }
+            }
+            let best_delta_ms = best.1 as f64 * 1000.0 / sr as f64;
+            println!("[DIAG] 第{}段 网格结果(共{}点):{}", seg_idx + 1, count, results_line);
+            // 从结果行里抓出 delta=0 的 MOS 作为「当前对齐 MOS」基准
+            // 简化：直接重新调用一次当前对齐
+            let _ = fs::remove_file(&ref_temp);
+            let _ = fs::remove_file(&deg_temp);
+            println!("[DIAG] 第{}段 最优 MOS={:.3} @ delta={:+.0}ms (seg_start={} → {})",
+                     seg_idx + 1, best.0, best_delta_ms, seg_start,
+                     (seg_start as i64 + best.1) as usize);
+        }
+
        // 收集对齐偏移（秒）
        alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
        // 先提取段数据
