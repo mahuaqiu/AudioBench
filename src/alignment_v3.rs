@@ -350,9 +350,10 @@ pub fn find_all_alignments_v3(
                     let absolute_start = deg_voice_start - v_start;
                     let absolute_end = absolute_start + reference.len();
 
-                    println!("      绝对坐标: start={}, end={}", absolute_start, absolute_end);
+                    println!("      绝对坐标: start={}, end={}, deg_len={}", absolute_start, absolute_end, degraded.len());
 
                     if absolute_end <= degraded.len() {
+                        println!("      进入置信度计算...");
                         // 5. 计算置信度（归一化互相关）
                         let confidence = compute_envelope_correlation(
                             pure_voice_ref,
