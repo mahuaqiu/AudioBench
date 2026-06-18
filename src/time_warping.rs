@@ -127,19 +127,6 @@ pub fn compute_offset_series(
         }
     }
 
-    // [DIAG] offset 序列统计
-    let valid_count = offsets.iter().filter(|o| o.is_some()).count();
-    let mut min_off = f64::INFINITY;
-    let mut max_off = f64::NEG_INFINITY;
-    for o in offsets.iter().flatten() {
-        if *o < min_off { min_off = *o; }
-        if *o > max_off { max_off = *o; }
-    }
-    if min_off != f64::INFINITY {
-        eprintln!("[DIAG] offset 序列: 总窗口数={}, 有效={}, 范围=[{:.1}, +{:.1}]ms",
-                  offsets.len(), valid_count, min_off, max_off);
-    }
-
     offsets
 }
 
@@ -209,8 +196,6 @@ pub fn detect_warpings_from_offsets(
         .collect();
 
     if valid_offsets.len() < 3 {
-        // [DIAG] 有效点太少，跳过
-        eprintln!("[DIAG] 第{}段 漂移检测: 有效点不足 ({} < 3)", segment_index + 1, valid_offsets.len());
         return vec![];
     }
 
@@ -239,19 +224,11 @@ pub fn detect_warpings_from_offsets(
             };
             let jump_magnitude = after - before;
             jump_events.push((i, jump_magnitude));
-
-            // [DIAG] 打印突变检测详情
-            eprintln!("[DIAG] 第{}段 突变检测: 窗口{}, Δ={:.1}ms, 幅度={:.1}ms",
-                      segment_index + 1, i, delta, jump_magnitude);
         }
     }
 
     // ===== 步骤 2：斜坡检测（拉伸 / 压缩） =====
     let (slope, _intercept, r_squared) = linear_regression(&relative_offsets);
-
-    // [DIAG] 打印线性回归详情
-    eprintln!("[DIAG] 第{}段 斜坡检测: 斜率={:.3}ms/窗, R²={:.3}, 阈值 slope>{} || R²<{}",
-              segment_index + 1, slope, r_squared, config.slope_threshold, config.min_r_squared);
 
     let is_slope_significant = slope.abs() > config.slope_threshold && r_squared > config.min_r_squared;
 
@@ -285,10 +262,6 @@ pub fn detect_warpings_from_offsets(
                 drift_ms,
                 drift_type,
             });
-
-            // [DIAG] 打印突变事件
-            eprintln!("[DIAG] 第{}段 漂移事件: 类型={}, drift={:.1}ms, 时间={:.3}s-{:.3}s",
-                      segment_index + 1, drift_type.chinese(), drift_ms, start_time_s, end_time_s);
         }
     } else if is_slope_significant {
         // 斜坡检测：计算总漂移幅度
@@ -313,21 +286,7 @@ pub fn detect_warpings_from_offsets(
                 drift_ms,
                 drift_type,
             });
-
-            // [DIAG] 打印斜坡事件
-            eprintln!("[DIAG] 第{}段 漂移事件: 类型={}, drift={:.1}ms, 时间={:.3}s-{:.3}s, 斜率={:.3}ms/窗, R²={:.3}",
-                      segment_index + 1, drift_type.chinese(), drift_ms, start_time_s, end_time_s, slope, r_squared);
         }
-    }
-
-    // [DIAG] 汇总
-    if events.is_empty() {
-        eprintln!("[DIAG] 第{}段 漂移检测: 未检测到显著漂移 (min_drift_ms={})",
-                  segment_index + 1, config.min_drift_ms);
-    } else {
-        let total_ms: f64 = events.iter().map(|e| e.drift_ms).sum();
-        eprintln!("[DIAG] 第{}段 漂移检测汇总: {}事件, 总漂移={:.1}ms",
-                  segment_index + 1, events.len(), total_ms);
     }
 
     events

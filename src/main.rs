@@ -176,29 +176,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ref_audio = ref_audio.resample(target_rate)?;
     let rec_audio = rec_audio.resample(target_rate)?;
 
-    // [DIAG] 隔离测试：定位 audio_bench 与原生 visqol 之间的 0.5 分差距来源
-    // 用 audio_bench 自己的写 WAV + 同一个 visqol 二进制，跑 ref vs ref，
-    // 与原生命令行结果对比。
-    // - 若 MOS ≈ 4.6：audio_bench 链路无损，差距来自对齐
-    // - 若 MOS ≈ 4.06：audio_bench 写 WAV 环节（int16 量化/补零）引入损伤
-    {
-        let temp_dir = std::env::temp_dir().join("audiobench");
-        fs::create_dir_all(&temp_dir)?;
-        let ref_iso_a = temp_dir.join("ref_iso_a.wav");
-        let ref_iso_b = temp_dir.join("ref_iso_b.wav");
-        // 同一份内存样本写两次 → ref vs ref（理论满分）
-        audio_io::write_wav_mono(&ref_iso_a, &ref_audio.samples, ref_audio.sample_rate)?;
-        audio_io::write_wav_mono(&ref_iso_b, &ref_audio.samples, ref_audio.sample_rate)?;
-        println!("[DIAG][隔离] === audio_bench 写 WAV → visqol (ref vs ref) ===");
-        match visqol::evaluate_with_visqol(&ref_iso_a, &ref_iso_b, mode) {
-            Ok(r) => println!("[DIAG][隔离] ref-vs-ref (audio_bench链路): MOS={:.3}, VNSIM={:.4}  ← 对比原生 visqol 4.6",
-                              r.moslqo, r.vnsim),
-            Err(e) => println!("[DIAG][隔离] 调用失败: {}", e),
-        }
-        let _ = fs::remove_file(&ref_iso_a);
-        let _ = fs::remove_file(&ref_iso_b);
-    }
-
     // [DIAG] 重采样后诊断：采样率、长度、RMS/峰值对比，判断是否发生重采样损伤
     {
         fn rms(s: &[f64]) -> f64 {
@@ -208,7 +185,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fn peak(s: &[f64]) -> f64 { s.iter().map(|&x| x.abs()).fold(0.0f64, f64::max) }
         println!("[DIAG][处理损伤] 参考 重采样后={}Hz, 样本数={}, 峰值={:.5}, RMS={:.5}",
                  ref_audio.sample_rate, ref_audio.samples.len(), peak(&ref_audio.samples), rms(&ref_audio.samples));
-        println!("[DIAG][处理损伤] 提示: 若重采样前后采样率不同，FIR低通+线性插值会引入损伤；若峰值接近1.0，int16 量化前可能已发生削波。");
     }
 
     let ref_duration = ref_audio.duration_secs();
@@ -272,71 +248,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let seg_start = seg_align.offset_samples.min(rec_audio.samples.len());
         let seg_end = (seg_start + ref_audio.samples.len()).min(rec_audio.samples.len());
 
-        // [DIAG] 偏移网格搜索：只在第 1 段执行（避免多段循环卡死），
-        // 在当前对齐点附近做 ±N samples 微调，找到 MOS 最高的偏移。
-        // 用于区分「对齐误差」vs「处理损伤」：
-        // - 若最优点 ≠ 当前点且 MOS 明显更高 → 对齐精度问题（根因 A/B/C）
-        // - 若最优点 = 当前点，但 MOS 仍远低于 visqol 原生 ref-vs-ref → 处理损伤（重采样/int16/补零）
-        if seg_idx == 0 {
-            let sr = ref_audio.sample_rate;
-            let ref_len = ref_audio.samples.len();
-            // 搜索范围 ±15ms，步长 1ms（足够覆盖帧对齐误差，又不太慢）
-            let search_ms: i32 = 15;
-            let step_ms: i32 = 1;
-            let search_samples = (sr as f64 * search_ms as f64 / 1000.0) as i32;
-            let step_samples = (sr as f64 * step_ms as f64 / 1000.0).max(1.0) as usize;
-
-            // 临时文件复用
-            let temp_dir = std::env::temp_dir().join("audiobench");
-            fs::create_dir_all(&temp_dir)?;
-            let ref_temp = temp_dir.join("ref_grid.wav");
-            let deg_temp = temp_dir.join("deg_grid.wav");
-            audio_io::write_wav_mono(&ref_temp, &ref_audio.samples, sr)?;
-
-            println!("[DIAG] 第{}段 === 偏移网格搜索 === 范围 ±{}ms, 步长 {}ms, 当前对齐 seg_start={}",
-                     seg_idx + 1, search_ms, step_ms, seg_start);
-
-            let mut best = (f64::NEG_INFINITY, 0i64); // (mos, delta_samples)
-            let mut cur_mos: f64 = 0.0;
-            let mut results_line = String::new();
-            let mut count = 0;
-            for delta in (-search_samples..=search_samples).step_by(step_samples) {
-                let try_start = seg_start as i64 + delta as i64;
-                if try_start < 0 || (try_start as usize) + ref_len > rec_audio.samples.len() {
-                    continue;
-                }
-                let try_start = try_start as usize;
-                let try_end = try_start + ref_len;
-                let mut seg_deg = rec_audio.samples[try_start..try_end].to_vec();
-                seg_deg.resize(ref_len, 0.0);
-                audio_io::write_wav_mono(&deg_temp, &seg_deg, sr)?;
-                match visqol::evaluate_with_visqol(&ref_temp, &deg_temp, mode) {
-                    Ok(r) => {
-                        let delta_ms = delta as f64 * 1000.0 / sr as f64;
-                        if delta == 0 { cur_mos = r.moslqo; }
-                        results_line.push_str(&format!(" {:+.0}ms={:.3}", delta_ms, r.moslqo));
-                        count += 1;
-                        if r.moslqo > best.0 {
-                            best = (r.moslqo, delta as i64);
-                        }
-                    }
-                    Err(e) => {
-                        println!("[DIAG]    delta={} 调用失败: {}", delta, e);
-                    }
-                }
-            }
-            // delta=0 越界时用「最接近 0 的实测点」作为当前对齐基准
-            if cur_mos == 0.0 && best.0 > f64::NEG_INFINITY {
-                cur_mos = best.0;
-            }
-            let best_delta_ms = best.1 as f64 * 1000.0 / sr as f64;
-            println!("[DIAG] 第{}段 网格结果(共{}点):{}", seg_idx + 1, count, results_line);
-            println!("[DIAG] 第{}段 当前(0ms)={:.3}, 最优 MOS={:.3} @ delta={:+.0}ms, 提升={:+.3}",
-                     seg_idx + 1, cur_mos, best.0, best_delta_ms, best.0 - cur_mos);
-            let _ = fs::remove_file(&ref_temp);
-            let _ = fs::remove_file(&deg_temp);
-        }
-
        // 收集对齐偏移（秒）
        alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
        // 先提取段数据
@@ -354,25 +265,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
        // 实际音频时长（秒），用于漂移检测
        let seg_actual_dur_s = seg_actual_end as f64 / ref_audio.sample_rate as f64;
        seg_durations_s.push(seg_actual_dur_s);
-
-       // [DIAG] 每段提取诊断：边界 + 有效长度
-       // - seg_raw_samples: resize 补零前原始段长（可能 < ref_len，说明录制在段尾被截断）
-       // - seg_actual_end: resize 后再 find_actual_audio_end，定位「补零区起点」
-       {
-           let sr = ref_audio.sample_rate as f64;
-           let ref_len = ref_audio.samples.len();
-           let raw = _seg_raw_samples;
-           println!("[DIAG] 第{}段 边界: seg_start={}, seg_end={}, 段原始长度={} (参考长度={}, 录制末尾剩余可取={})",
-                    seg_idx + 1, seg_start, seg_end, raw, ref_len,
-                    rec_audio.samples.len().saturating_sub(seg_start));
-           println!("[DIAG] 第{}段 长度: 段原始={:.3}s, 补零后有效={:.3}s (尾部 {:.0}ms 被判为静音/补零), 参考={:.3}s",
-                    seg_idx + 1, raw as f64 / sr, seg_actual_end as f64 / sr,
-                    (ref_len - seg_actual_end) as f64 / sr * 1000.0, ref_len as f64 / sr);
-           println!("[DIAG] 第{}段 口径差: 段原始-参考={:+.0}ms, 段有效-参考={:+.0}ms (截断/漂移实际将用后者)",
-                    seg_idx + 1,
-                    (raw as f64 - ref_len as f64) / sr * 1000.0,
-                    (seg_actual_end as f64 - ref_len as f64) / sr * 1000.0);
-       }
 
         // 调试：打印分段提取的详细信息
         let seg_samples = &rec_audio.samples[seg_start..seg_end];
@@ -428,22 +320,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             seg_actual_len, // 有效长度，排除补零尾段
         );
 
-        // [DIAG] 中断检测诊断：检测器输入范围 + 每个事件详情
-        {
-            let sr = ref_audio.sample_rate as f64;
-            let cfg = metrics::DropoutDetectorConfig::for_sample_rate(ref_audio.sample_rate);
-            println!("[DIAG] 第{}段 中断检测: 参考长={}, seg_degraded长={}, valid_len={} ({:.3}s), 最短中断阈值={:.0}ms, 静音阈值={}, 衰减阈值={}",
-                     seg_idx + 1, ref_audio.samples.len(), seg_degraded.len(),
-                     seg_actual_len, seg_actual_len as f64 / sr,
-                     cfg.min_duration_ms, cfg.silence_threshold, cfg.attenuation_threshold);
-            println!("[DIAG] 第{}段 中断事件数={}", seg_idx + 1, dropout_events.len());
-            for (i, ev) in dropout_events.iter().enumerate() {
-                println!("[DIAG]    中断#{}: {:.3}-{:.3}s 持续{:.0}ms, ref_rms={:.5}, deg_rms={:.5}, 衰减比={:.4}",
-                         i + 1, ev.start_time_s, ev.end_time_s, ev.duration_ms,
-                         ev.ref_rms, ev.deg_rms, ev.attenuation_ratio);
-            }
-        }
-
         let dropout_duration_ms: f64 = dropout_events.iter().map(|e| e.duration_ms).sum();
         let anomaly = metrics::AudioAnomalyReport {
             has_anomaly: !dropout_events.is_empty(),
@@ -494,12 +370,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 使用新的滑窗互相关 + 形态分析检测
     let warping_config = metrics::WarpingConfig::for_sample_rate(ref_audio.sample_rate);
 
-    // [DIAG] 漂移检测配置
-    eprintln!("[DIAG] === 漂移检测配置 === window={}ms, hop={}ms, search_radius={}ms, silence={}, jump={}ms, slope={}, min_drift={}ms, min_r2={}",
-              warping_config.window_ms, warping_config.hop_ms, warping_config.search_radius_ms,
-              warping_config.silence_threshold, warping_config.jump_threshold_ms,
-              warping_config.slope_threshold, warping_config.min_drift_ms, warping_config.min_r_squared);
-
     let mut all_warping_events: Vec<metrics::WarpingEvent> = Vec::new();
 
     // 对每段进行漂移检测
@@ -538,34 +408,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         artifact_threshold,
         true, // 排除每段首尾 patch（边界效应：补零/能量过渡天然偏低）
     );
-
-    // [DIAG] 全局频谱检测诊断：每段 patch 数量 + 低相似度分布
-    {
-        println!("[DIAG] === 频谱检测汇总 === 阈值 patch_sim<{}, 段内低相似度比例>{}% 才报异常",
-                 artifact_threshold, 0.25 * 100.0);
-        for (i, patches) in all_patch_sims.iter().enumerate() {
-            if patches.is_empty() {
-                println!("[DIAG]    第{}段: 无 patch", i + 1);
-                continue;
-            }
-            let (start, end) = if patches.len() >= 4 { (1, patches.len() - 1) } else { (0, patches.len()) };
-            let valid_count = end - start;
-            let valid_sims: Vec<f64> = patches[start..end].iter().map(|p| p.similarity).collect();
-            let low_count = valid_sims.iter().filter(|&&s| s < artifact_threshold).count();
-            let min_sim = valid_sims.iter().cloned().fold(f64::INFINITY, f64::min);
-            let score = if valid_count > 0 { low_count as f64 / valid_count as f64 } else { 0.0 };
-            println!("[DIAG]    第{}段: patch总数={}, 有效patch(排除首尾)={}, 低相似度(<{})={}/{}) 比例={:.1}% 最低={:.3}",
-                     i + 1, patches.len(), valid_count, artifact_threshold, low_count, valid_count,
-                     score * 100.0, min_sim);
-            if low_count > 0 {
-                let detail: Vec<String> = patches[start..end].iter().enumerate()
-                    .filter(|(_, p)| p.similarity < artifact_threshold)
-                    .map(|(k, p)| format!("patch{}={:.3}", start + k, p.similarity))
-                    .collect();
-                println!("[DIAG]       低相似度 patch: {}", detail.join(", "));
-            }
-        }
-    }
 
     // 将时轴漂移和频谱损伤结果更新到每段报告中
     for (seg_idx, seg_result) in segment_results.iter_mut().enumerate() {

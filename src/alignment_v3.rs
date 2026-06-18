@@ -171,10 +171,8 @@ pub fn align_core_by_envelope(
     let ref_env = compute_rms_envelope(pure_voice_ref, window_size);
 
     if ref_env.is_empty() {
-        println!("      [DEBUG] ref_env 为空");
         return None;
     }
-    println!("      [DEBUG] ref_env 长度: {}", ref_env.len());
 
     // 扩大搜索区间：在 segment 基础上往外扩展 1 秒
     // 防止 segment 刚好覆盖整个音频时没有搜索空间
@@ -182,20 +180,14 @@ pub fn align_core_by_envelope(
     let search_start = segment.start_sample.saturating_sub(margin);
     let search_end = (segment.end_sample + margin).min(deg_long_audio.len());
 
-    println!("      [DEBUG] search: [{}-{}], len={}", search_start, search_end, search_end - search_start);
-
     if search_end <= search_start {
-        println!("      [DEBUG] search_end <= search_start");
         return None;
     }
 
     let search_src = &deg_long_audio[search_start..search_end];
     let deg_env = compute_rms_envelope(search_src, window_size);
 
-    println!("      [DEBUG] deg_env 长度: {}, ref_env: {}", deg_env.len(), ref_env.len());
-
     if deg_env.len() < ref_env.len() {
-        println!("      [DEBUG] deg_env.len() < ref_env.len()");
         return None;
     }
 
@@ -231,23 +223,17 @@ fn compute_envelope_correlation(
     deg_audio: &[f64],
     sample_rate: usize,
 ) -> f64 {
-    println!("         [CORR] 调用: ref_len={}, deg_len={}", ref_audio.len(), deg_audio.len());
-
     let window_size = (0.010 * sample_rate as f64) as usize;
     let ref_env = compute_rms_envelope(ref_audio, window_size);
     let deg_env = compute_rms_envelope(deg_audio, window_size);
 
-    println!("         [CORR] ref_env={}, deg_env={}", ref_env.len(), deg_env.len());
-
     if ref_env.is_empty() || deg_env.is_empty() {
-        println!("         [CORR] 空包络，返回 0");
         return 0.0;
     }
 
     // 取等长部分
     let min_len = ref_env.len().min(deg_env.len());
     if min_len == 0 {
-        println!("         [CORR] min_len=0，返回 0");
         return 0.0;
     }
 
@@ -266,7 +252,6 @@ fn compute_envelope_correlation(
     let deg_std = deg_var.sqrt();
 
     if ref_std < 1e-10 || deg_std < 1e-10 {
-        println!("         [CORR] 标准差过小，返回 0");
         return 0.0;
     }
 
@@ -277,9 +262,7 @@ fn compute_envelope_correlation(
     }
     correlation /= min_len as f64 * ref_std * deg_std;
 
-    let result = correlation.clamp(0.0, 1.0);
-    println!("         [CORR] 最终结果: {:.4}", result);
-    result
+    correlation.clamp(0.0, 1.0)
 }
 
 // ============================================================================
