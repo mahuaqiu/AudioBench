@@ -176,6 +176,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ref_audio = ref_audio.resample(target_rate)?;
     let rec_audio = rec_audio.resample(target_rate)?;
 
+    // [DIAG] 隔离测试：定位 audio_bench 与原生 visqol 之间的 0.5 分差距来源
+    // 用 audio_bench 自己的写 WAV + 同一个 visqol 二进制，跑 ref vs ref，
+    // 与原生命令行结果对比。
+    // - 若 MOS ≈ 4.6：audio_bench 链路无损，差距来自对齐
+    // - 若 MOS ≈ 4.06：audio_bench 写 WAV 环节（int16 量化/补零）引入损伤
+    {
+        let temp_dir = std::env::temp_dir().join("audiobench");
+        fs::create_dir_all(&temp_dir)?;
+        let ref_iso_a = temp_dir.join("ref_iso_a.wav");
+        let ref_iso_b = temp_dir.join("ref_iso_b.wav");
+        // 同一份内存样本写两次 → ref vs ref（理论满分）
+        audio_io::write_wav_mono(&ref_iso_a, &ref_audio.samples, ref_audio.sample_rate)?;
+        audio_io::write_wav_mono(&ref_iso_b, &ref_audio.samples, ref_audio.sample_rate)?;
+        println!("[DIAG][隔离] === audio_bench 写 WAV → visqol (ref vs ref) ===");
+        match visqol::evaluate_with_visqol(&ref_iso_a, &ref_iso_b, mode) {
+            Ok(r) => println!("[DIAG][隔离] ref-vs-ref (audio_bench链路): MOS={:.3}, VNSIM={:.4}  ← 对比原生 visqol 4.6",
+                              r.moslqo, r.vnsim),
+            Err(e) => println!("[DIAG][隔离] 调用失败: {}", e),
+        }
+        let _ = fs::remove_file(&ref_iso_a);
+        let _ = fs::remove_file(&ref_iso_b);
+    }
+
     // [DIAG] 重采样后诊断：采样率、长度、RMS/峰值对比，判断是否发生重采样损伤
     {
         fn rms(s: &[f64]) -> f64 {
@@ -274,7 +297,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                      seg_idx + 1, search_ms, step_ms, seg_start);
 
             let mut best = (f64::NEG_INFINITY, 0i64); // (mos, delta_samples)
-            let mut cur_mos = f64::NAN;
+            let mut cur_mos: f64 = 0.0;
             let mut results_line = String::new();
             let mut count = 0;
             for delta in (-search_samples..=search_samples).step_by(step_samples) {
@@ -301,6 +324,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("[DIAG]    delta={} 调用失败: {}", delta, e);
                     }
                 }
+            }
+            // delta=0 越界时用「最接近 0 的实测点」作为当前对齐基准
+            if cur_mos == 0.0 && best.0 > f64::NEG_INFINITY {
+                cur_mos = best.0;
             }
             let best_delta_ms = best.1 as f64 * 1000.0 / sr as f64;
             println!("[DIAG] 第{}段 网格结果(共{}点):{}", seg_idx + 1, count, results_line);
