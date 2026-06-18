@@ -235,13 +235,17 @@ fn compute_envelope_correlation(
     let ref_env = compute_rms_envelope(ref_audio, window_size);
     let deg_env = compute_rms_envelope(deg_audio, window_size);
 
+    println!("         [CORR] ref_env={}, deg_env={}", ref_env.len(), deg_env.len());
+
     if ref_env.is_empty() || deg_env.is_empty() {
+        println!("         [CORR] empty envelope, return 0");
         return 0.0;
     }
 
     // 取等长部分
     let min_len = ref_env.len().min(deg_env.len());
     if min_len == 0 {
+        println!("         [CORR] min_len=0, return 0");
         return 0.0;
     }
 
@@ -260,6 +264,7 @@ fn compute_envelope_correlation(
     let deg_std = deg_var.sqrt();
 
     if ref_std < 1e-10 || deg_std < 1e-10 {
+        println!("         [CORR] std too small, return 0");
         return 0.0;
     }
 
@@ -270,7 +275,9 @@ fn compute_envelope_correlation(
     }
     correlation /= min_len as f64 * ref_std * deg_std;
 
-    correlation.clamp(0.0, 1.0)
+    let result = correlation.clamp(0.0, 1.0);
+    println!("         [CORR] result={:.4}", result);
+    result
 }
 
 // ============================================================================
