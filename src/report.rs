@@ -35,11 +35,11 @@ pub struct SegmentResult {
     pub level_ref: LevelResult,
     pub level_deg: LevelResult,
     pub band_energy_ratios: Vec<f64>,
-    /// DNSMOS 人声信号分 (1.0-5.0)
+    /// DNSMOS Speech quality 人声信号分 (1.0-5.0)
     pub sig: Option<f64>,
-    /// DNSMOS 背景噪声分 (1.0-5.0)
+    /// DNSMOS Background noise 背景噪声分 (1.0-5.0)
     pub bak: Option<f64>,
-    /// DNSMOS 整体综合分 (1.0-5.0)
+    /// DNSMOS Overall MOS 整体综合分 (1.0-5.0)
     pub ovrl: Option<f64>,
 }
 

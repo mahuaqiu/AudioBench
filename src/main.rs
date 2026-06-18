@@ -225,9 +225,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
        // 收集对齐偏移（秒）
        alignment_offsets.push(seg_start as f64 / ref_audio.sample_rate as f64);
-       // 先提取段数据并补零到参考长度
-       let mut seg_degraded = rec_audio.samples[seg_start..seg_end].to_vec();
-       let _seg_raw_samples = seg_degraded.len(); // 补零前的实际样本数
+       // 先提取段数据
+       // - seg_degraded_raw: 原始段（未补零），用于 DNSMOS 等无参考评估，避免补零区污染
+       // - seg_degraded: 补零到参考长度，用于 ViSQOL 对齐评估（ViSQOL 需要参考/录制等长）
+       let seg_degraded_raw = rec_audio.samples[seg_start..seg_end].to_vec();
+       let _seg_raw_samples = seg_degraded_raw.len(); // 补零前的实际样本数
+       let mut seg_degraded = seg_degraded_raw.clone();
        seg_degraded.resize(ref_audio.samples.len(), 0.0);
 
        // 检测补零后的实际音频末尾（用于截断和漂移检测）
@@ -348,7 +351,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let _ = fs::remove_file(&deg_temp);
 
         // DNSMOS 评估（仅对录制音频，无参考）
-        let (sig, bak, ovrl) = match dnsmos_evaluator.evaluate(&seg_degraded, ref_audio.sample_rate) {
+        // 注意：传入未补零的原始段 seg_degraded_raw，避免补零区被 DNSMOS 当成静音
+        // 窗口（DNSMOS 内部会按 9.01s 滑窗，补零区会显著拉低 SIG/OVRL 分数）
+        let (sig, bak, ovrl) = match dnsmos_evaluator.evaluate(&seg_degraded_raw, ref_audio.sample_rate) {
             Ok(r) => (Some(r.sig), Some(r.bak), Some(r.ovrl)),
             Err(e) => {
                 println!("[!] 第{}段 DNSMOS 评估失败: {}", seg_idx + 1, e);

@@ -216,12 +216,12 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-hint">低相似度片段比例</div>
 </div>
 <div class="card">
-<div class="card-label">Signal MOS</div>
+<div class="card-label">Speech quality</div>
 <div class="card-value {sig_class}">{sig_mean:.2}</div>
 <div class="card-hint">人声信号分（1-5），值越高越好</div>
 </div>
 <div class="card">
-<div class="card-label">Background MOS</div>
+<div class="card-label">Background noise</div>
 <div class="card-value {bak_class}">{bak_mean:.2}</div>
 <div class="card-hint">背景噪声分（1-5），值越高越好</div>
 </div>
@@ -283,7 +283,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="section"><div class="section-title">指标说明</div>
 <dl class="glossary">
 <dt><span class="tag">MOS-LQO</span>ViSQOL预测质量分</dt>
-<dd>ViSQOL通过SVM模型将频域相似度映射为1-5的预测分。值域1-5，越高表示预测质量越好。建议用于同场景相对比较。</dd>
+<dd>ViSQOL通过SVM模型将频域相似度映射为1-5的预测分。值域1-5，越高表示预测质量越好。建议用于同场景相对比较。属于<strong>有参考评估</strong>：测量"录制比参考损失了多少"，参考和录制"一样差"时分数也会偏高，不代表绝对质量。</dd>
 <dt><span class="tag">VNSIM</span>全局神经图相似度</dt>
 <dd>基于Gammatone听觉滤波器组提取的频谱图，计算参考与录制之间的NSIM。值域0-1，1表示频谱完全一致。</dd>
 <dt><span class="tag">fVNSIM</span>各频段相似度</dt>
@@ -298,12 +298,12 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <dd>检测同一段音频内容在录制端的时长偏差，反映网络抖动导致的音频拉长/压缩。</dd>
 <dt><span class="tag">频谱损伤</span>机械音</dt>
 <dd>检测时域能量正常但频域结构被破坏的片段（PLC 伪造音、编解码杂音等）。</dd>
-<dt><span class="tag">DNSMOS-SIG</span> Signal MOS (人声信号分)</dt>
+<dt><span class="tag">DNSMOS-SIG</span> Speech quality (人声信号分)</dt>
 <dd>评估人声是否清晰、自然。如果降噪算法用力过猛导致发言人声音变小或变哑，这个分数就会很低。(ITU-T P.835)</dd>
-<dt><span class="tag">DNSMOS-BAK</span> Background MOS (背景噪声分)</dt>
+<dt><span class="tag">DNSMOS-BAK</span> Background noise (背景噪声分)</dt>
 <dd>评估背景杂音的消除程度。如果会议室里键盘敲击声、空调风噪被去得很干净，这个分数就会很高。(ITU-T P.835)</dd>
 <dt><span class="tag">DNSMOS-OVRL</span> Overall MOS (整体综合分)</dt>
-<dd>结合人声和噪声后的整体听感主观评分。</dd>
+<dd>结合人声和噪声后的整体听感主观评分。DNSMOS 属于<strong>无参考评估</strong>：直接评判录制音频本身的绝对质量，不需要参考音频，因此可与 ViSQOL 互补——前者回答"本身有多好"，后者回答"相对损失了多少"。</dd>
 </dl>
 </div>
 
