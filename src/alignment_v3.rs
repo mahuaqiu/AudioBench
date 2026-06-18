@@ -171,8 +171,10 @@ pub fn align_core_by_envelope(
     let ref_env = compute_rms_envelope(pure_voice_ref, window_size);
 
     if ref_env.is_empty() {
+        println!("      [DEBUG] ref_env 为空");
         return None;
     }
+    println!("      [DEBUG] ref_env 长度: {}", ref_env.len());
 
     // 扩大搜索区间：在 segment 基础上往外扩展 1 秒
     // 防止 segment 刚好覆盖整个音频时没有搜索空间
@@ -180,14 +182,20 @@ pub fn align_core_by_envelope(
     let search_start = segment.start_sample.saturating_sub(margin);
     let search_end = (segment.end_sample + margin).min(deg_long_audio.len());
 
+    println!("      [DEBUG] search: [{}-{}], len={}", search_start, search_end, search_end - search_start);
+
     if search_end <= search_start {
+        println!("      [DEBUG] search_end <= search_start");
         return None;
     }
 
     let search_src = &deg_long_audio[search_start..search_end];
     let deg_env = compute_rms_envelope(search_src, window_size);
 
+    println!("      [DEBUG] deg_env 长度: {}, ref_env: {}", deg_env.len(), ref_env.len());
+
     if deg_env.len() < ref_env.len() {
+        println!("      [DEBUG] deg_env.len() < ref_env.len()");
         return None;
     }
 
