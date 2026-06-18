@@ -170,9 +170,15 @@ pub fn align_core_by_envelope(
     // 计算参考音频核心段的包络
     let ref_env = compute_rms_envelope(pure_voice_ref, window_size);
 
-    // 提取搜索区间
-    let search_start = segment.start_sample.min(deg_long_audio.len());
-    let search_end = segment.end_sample.min(deg_long_audio.len());
+    if ref_env.is_empty() {
+        return None;
+    }
+
+    // 扩大搜索区间：在 segment 基础上往外扩展 1 秒
+    // 防止 segment 刚好覆盖整个音频时没有搜索空间
+    let margin = sample_rate;
+    let search_start = segment.start_sample.saturating_sub(margin);
+    let search_end = (segment.end_sample + margin).min(deg_long_audio.len());
 
     if search_end <= search_start {
         return None;
@@ -181,7 +187,7 @@ pub fn align_core_by_envelope(
     let search_src = &deg_long_audio[search_start..search_end];
     let deg_env = compute_rms_envelope(search_src, window_size);
 
-    if deg_env.len() < ref_env.len() || ref_env.is_empty() {
+    if deg_env.len() < ref_env.len() {
         return None;
     }
 
