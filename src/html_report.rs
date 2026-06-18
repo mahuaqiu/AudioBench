@@ -94,10 +94,10 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
     let mos_is_low = report.overall.moslqo_mean < 3.0;
     let mos_class = if mos_is_low { "bad" } else { "good" };
 
-    // DNSMOS 颜色类
-    let sig_class = if report.overall.sig_mean.map(|v| v < 3.0).unwrap_or(false) { "bad" } else { "good" };
-    let bak_class = if report.overall.bak_mean.map(|v| v < 3.0).unwrap_or(false) { "bad" } else { "good" };
-    let ovrl_class = if report.overall.ovrl_mean.map(|v| v < 3.0).unwrap_or(false) { "bad" } else { "good" };
+    // DNSMOS 颜色类（无参考评估，不显示红绿）
+    let sig_class = "good";
+    let bak_class = "good";
+    let ovrl_class = "good";
 
     // 各异常类型独立判断颜色
     let dropout_class = if total_dropout > 0.0 { "bad" } else { "" };
@@ -135,6 +135,7 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
   .card-value.warn {{ color:var(--yellow); }}
   .card-value.bad {{ color:var(--red); }}
   .card-hint {{ font-size:12px; color:var(--text3); margin-top:6px; }}
+  .no-ref-tag {{ display:inline-block; background:#fed7d7; color:#c53030; padding:1px 6px; border-radius:4px; font-size:10px; margin-left:6px; vertical-align:middle; }}
   .section {{ background:var(--card); border:1px solid var(--border); border-radius:8px; padding:20px; margin-bottom:24px; }}
   .section-title {{ font-size:16px; font-weight:600; margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--border); }}
   .chart-full {{ position:relative; height:280px; }}
@@ -216,17 +217,17 @@ pub fn generate_html_report(report: &EvaluationReport) -> String {
 <div class="card-hint">低相似度片段比例</div>
 </div>
 <div class="card">
-<div class="card-label">Speech quality</div>
+<div class="card-label">Speech quality <span class="no-ref-tag">无参</span></div>
 <div class="card-value {sig_class}">{sig_mean:.2}</div>
 <div class="card-hint">人声信号分（1-5），值越高越好</div>
 </div>
 <div class="card">
-<div class="card-label">Background noise</div>
+<div class="card-label">Background noise <span class="no-ref-tag">无参</span></div>
 <div class="card-value {bak_class}">{bak_mean:.2}</div>
 <div class="card-hint">背景噪声分（1-5），值越高越好</div>
 </div>
 <div class="card">
-<div class="card-label">Overall MOS</div>
+<div class="card-label">Overall MOS <span class="no-ref-tag">无参</span></div>
 <div class="card-value {ovrl_class}">{ovrl_mean:.2}</div>
 <div class="card-hint">整体综合分（1-5），值越高越好</div>
 </div>
@@ -318,7 +319,7 @@ var waveformDeg = JSON.parse({waveform_deg_json});
 // 波形渲染器
 (function() {{
   var WAVEFORM_HEIGHT = 120;
-  var PIXELS_PER_SECOND = 100;
+  var PIXELS_PER_SECOND = 200;
   var SCROLL_SYNC_GROUP = [];
 
   function renderWaveform(canvasId, containerId, data, color) {{
@@ -373,13 +374,16 @@ var waveformDeg = JSON.parse({waveform_deg_json});
     // 时间刻度（每秒一条竖线）
     var samplesPerPixel = data.samples_per_pixel;
     var duration = data.duration_s;
+    var pixelCount = data.pixel_count;
+    // 计算每像素对应的秒数
+    var secondsPerPixel = duration / pixelCount;
     ctx.strokeStyle = 'rgba(0,0,0,0.15)';
     ctx.fillStyle = 'rgba(0,0,0,0.4)';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'center';
     for (var t = 1; t < Math.ceil(duration); t++) {{
-      var x = Math.round(t * PIXELS_PER_SECOND);
-      if (x >= canvasWidth) break;
+      var x = Math.round(t / secondsPerPixel);
+      if (x >= pixelCount) break;
       ctx.beginPath();
       ctx.moveTo(x, 0);
       ctx.lineTo(x, WAVEFORM_HEIGHT);
@@ -465,7 +469,7 @@ var waveformDeg = JSON.parse({waveform_deg_json});
   }}
   
   // 渲染两个波形
-  renderWaveform('waveformRef', 'waveformRefContainer', waveformRef, '#1a202c');
+  renderWaveform('waveformRef', 'waveformRefContainer', waveformRef, '#38a169');
   renderWaveform('waveformDeg', 'waveformDegContainer', waveformDeg, '#3182ce');
 }})();
 
@@ -844,13 +848,13 @@ fn generate_table_rows(report: &EvaluationReport) -> String {
         let mos_color = if seg.quality.moslqo < 3.0 { "color:#e53e3e;font-weight:bold;" } else { "" };
         let anomaly_color = if seg.anomaly.has_anomaly { "color:#e53e3e;font-weight:bold;" } else { "" };
 
-        // DNSMOS 颜色
+        // DNSMOS 颜色（无参考评估，不显示红色）
         let sig_str = seg.sig.map(|v| format!("{:.2}", v)).unwrap_or("-".to_string());
         let bak_str = seg.bak.map(|v| format!("{:.2}", v)).unwrap_or("-".to_string());
         let ovrl_str = seg.ovrl.map(|v| format!("{:.2}", v)).unwrap_or("-".to_string());
-        let sig_color = if seg.sig.map(|v| v < 3.0).unwrap_or(false) { "color:#e53e3e;" } else { "" };
-        let bak_color = if seg.bak.map(|v| v < 3.0).unwrap_or(false) { "color:#e53e3e;" } else { "" };
-        let ovrl_color = if seg.ovrl.map(|v| v < 3.0).unwrap_or(false) { "color:#e53e3e;" } else { "" };
+        let sig_color = "";
+        let bak_color = "";
+        let ovrl_color = "";
 
         format!("<tr><td>第{}段</td><td>{:.2}s-{:.2}s</td><td style=\"{}\">{:.2}</td><td>{:.4}</td><td style=\"{}\">{}</td><td style=\"{}\">{}</td><td style=\"{}\">{}</td><td>{:.4}</td><td>{:.4}</td><td>{:.4}</td><td style=\"{}\">{}</td></tr>",
             i+1, seg.start_time_s, seg.end_time_s, mos_color, seg.quality.moslqo, seg.quality.vnsim,

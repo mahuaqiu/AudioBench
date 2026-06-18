@@ -5,8 +5,6 @@
 //! 使用方法:
 //!   audio_bench --reference ref.wav --recorded rec.wav
 
-mod alignment;
-mod alignment_v2;
 mod alignment_v3;
 mod audio_io;
 mod metrics;
