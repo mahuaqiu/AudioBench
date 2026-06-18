@@ -285,6 +285,13 @@ pub fn find_all_alignments_v3(
     let segments = segment_long_audio_by_envelope(degraded, sample_rate);
     println!("🔔 VAD 状态机共捕获到 {} 个潜在受测音频区间", segments.len());
 
+    // 调试：打印每个区间
+    for (i, seg) in segments.iter().enumerate() {
+        println!("      区间{}: start={}, end={}, 长度={}",
+                 i + 1, seg.start_sample, seg.end_sample,
+                 seg.end_sample - seg.start_sample);
+    }
+
     if segments.is_empty() {
         println!("[!] 未检测到任何潜在测试区间");
         return vec![];
@@ -294,8 +301,9 @@ pub fn find_all_alignments_v3(
     let (v_start, v_end) = locate_acoustic_core(reference, 0.005);
     let pure_voice_ref = &reference[v_start..v_end];
 
-    println!("🔔 参考音频核心区: 样本 {}-{} (时长 {:.2}s)",
-             v_start, v_end, (v_end - v_start) as f64 / sample_rate as f64);
+    println!("🔔 参考音频核心区: 样本 {}-{} (时长 {:.2}s), 长度={}",
+             v_start, v_end, (v_end - v_start) as f64 / sample_rate as f64,
+             pure_voice_ref.len());
 
     if pure_voice_ref.is_empty() {
         println!("[!] 参考音频提取核心区失败");
@@ -306,50 +314,59 @@ pub fn find_all_alignments_v3(
 
     // 3. 对每个潜在区间进行核心区互相关对齐
     for (seg_idx, segment) in segments.iter().enumerate() {
+        println!("[*] 处理区间{}: start={}, end={}", seg_idx + 1, segment.start_sample, segment.end_sample);
+
         // 用纯有声区包络去录音中对表
-        if let Some(deg_voice_start) = align_core_by_envelope(
-            pure_voice_ref,
-            degraded,
-            segment,
-            sample_rate
-        ) {
-            // 4. 【自适应单块反推核心】：从有声起点往前倒退前静音长度
-            // 得到整段的绝对对齐切片起点
-            if deg_voice_start >= v_start {
-                let absolute_start = deg_voice_start - v_start;
-                let absolute_end = absolute_start + reference.len();
+        match align_core_by_envelope(pure_voice_ref, degraded, segment, sample_rate) {
+            Some(deg_voice_start) => {
+                println!("      核心区对齐: deg_voice_start={}", deg_voice_start);
 
-                if absolute_end <= degraded.len() {
-                    // 5. 计算置信度（归一化互相关）
-                    let confidence = compute_envelope_correlation(
-                        pure_voice_ref,
-                        &degraded[deg_voice_start..deg_voice_start + pure_voice_ref.len().min(degraded.len() - deg_voice_start)],
-                        sample_rate,
-                    );
+                // 4. 【自适应单块反推核心】：从有声起点往前倒退前静音长度
+                // 得到整段的绝对对齐切片起点
+                if deg_voice_start >= v_start {
+                    let absolute_start = deg_voice_start - v_start;
+                    let absolute_end = absolute_start + reference.len();
 
-                    // 额外验证：整段的对齐质量
-                    let full_confidence = compute_envelope_correlation(
-                        reference,
-                        &degraded[absolute_start..absolute_end.min(degraded.len())],
-                        sample_rate,
-                    );
+                    println!("      绝对坐标: start={}, end={}", absolute_start, absolute_end);
 
-                    // 取两者的较小值作为最终置信度（更严格）
-                    let final_confidence = confidence.min(full_confidence);
+                    if absolute_end <= degraded.len() {
+                        // 5. 计算置信度（归一化互相关）
+                        let confidence = compute_envelope_correlation(
+                            pure_voice_ref,
+                            &degraded[deg_voice_start..deg_voice_start + pure_voice_ref.len().min(degraded.len() - deg_voice_start)],
+                            sample_rate,
+                        );
 
-                    if final_confidence >= confidence_threshold {
-                        results.push(AlignmentResult {
-                            offset_samples: absolute_start,
-                            delay_ms: absolute_start as f64 / sample_rate as f64 * 1000.0,
-                            confidence: final_confidence,
-                        });
+                        // 额外验证：整段的对齐质量
+                        let full_confidence = compute_envelope_correlation(
+                            reference,
+                            &degraded[absolute_start..absolute_end.min(degraded.len())],
+                            sample_rate,
+                        );
 
-                        println!("      区间{}: 偏移 {:.3}s, 置信度 {:.1}%",
-                                 seg_idx + 1,
-                                 results.last().unwrap().delay_ms / 1000.0,
-                                 final_confidence * 100.0);
+                        println!("      置信度: 核心区={:.3}, 整段={:.3}", confidence, full_confidence);
+
+                        // 取两者的较小值作为最终置信度（更严格）
+                        let final_confidence = confidence.min(full_confidence);
+
+                        if final_confidence >= confidence_threshold {
+                            results.push(AlignmentResult {
+                                offset_samples: absolute_start,
+                                delay_ms: absolute_start as f64 / sample_rate as f64 * 1000.0,
+                                confidence: final_confidence,
+                            });
+
+                            println!("      ✅ 添加: 偏移 {:.3}s, 置信度 {:.1}%",
+                                     results.last().unwrap().delay_ms / 1000.0,
+                                     final_confidence * 100.0);
+                        } else {
+                            println!("      ❌ 置信度 {:.3} < {:.3}", final_confidence, confidence_threshold);
+                        }
                     }
                 }
+            }
+            None => {
+                println!("      ❌ align_core_by_envelope 返回 None");
             }
         }
     }
