@@ -7,6 +7,7 @@
 
 mod alignment;
 mod alignment_v2;
+mod alignment_v3;
 mod audio_io;
 mod metrics;
 mod visqol;
@@ -164,14 +165,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ref_duration = ref_audio.duration_secs();
     let rec_duration = rec_audio.duration_secs();
-    
-    // 多峰检测：使用频域特征匹配 + FFT 互相关精细化
-    println!("[*] 执行多峰检测（频域特征匹配 + 精细对齐）...");
-    let alignment_peaks = alignment_v2::find_all_alignments_hybrid(
+
+    // 多峰检测：使用 RMS 包络 + VAD 状态机 + 核心区互相关（针对会议软件优化）
+    println!("[*] 执行多峰检测（RMS包络 + VAD状态机 + 核心区互相关）...");
+    let alignment_peaks = alignment_v3::find_all_alignments_v3(
         &ref_audio.samples,
         &rec_audio.samples,
         ref_audio.sample_rate,
-        0.4,  // 置信度阈值：单次出现不该有第二个 >0.4 的峰；循环播放的相邻出现相关性也应 >0.4
+        0.4,  // 置信度阈值
     );
     
     let num_segments = alignment_peaks.len();
@@ -493,7 +494,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // 全局对齐信息（使用第一段的对齐信息）
-    let first_peak = alignment_peaks.first().cloned().unwrap_or(alignment_v2::AlignmentResult {
+    let first_peak = alignment_peaks.first().cloned().unwrap_or(alignment_v3::AlignmentResult {
         offset_samples: 0,
         delay_ms: 0.0,
         confidence: 0.0,
