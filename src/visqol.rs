@@ -1,26 +1,33 @@
 //! ViSQOL 集成模块
 //!
-//! 通过 include_bytes! 在编译时嵌入 visqol 二进制文件和模型文件，
-//! 运行时自动释放到临时目录并调用。
+//! 通过 include_bytes! 在编译时嵌入（zstd 压缩的）visqol 二进制文件和模型文件，
+//! 运行时自动解压释放到临时目录并调用。
 //! 不需要设置环境变量，单 EXE 即可运行。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::fs;
+use crate::decompress;
 
-// 编译时嵌入 visqol 二进制文件
-// 用户需要将编译好的 visqol.exe 放到项目根目录的 bin/ 目录下
+// 编译时嵌入 visqol 二进制文件（zstd 压缩）
+// 用户需要将编译好的 visqol.exe 放到项目根目录的 bin/ 目录下，然后运行压缩脚本
 #[cfg(target_os = "windows")]
-const VISQOL_BIN: &[u8] = include_bytes!("../bin/visqol.exe");
+const VISQOL_BIN_COMPRESSED: &[u8] = include_bytes!("../bin_compressed/visqol.exe.zst");
+#[cfg(target_os = "windows")]
+const VISQOL_BIN_ORIGINAL_SIZE: usize = 4;
 
 #[cfg(not(target_os = "windows"))]
-const VISQOL_BIN: &[u8] = include_bytes!("../bin/visqol");
+const VISQOL_BIN_COMPRESSED: &[u8] = include_bytes!("../bin_compressed/visqol.zst");
+#[cfg(not(target_os = "windows"))]
+const VISQOL_BIN_ORIGINAL_SIZE: usize = 36;
 
-// 编译时嵌入 ViSQOL 模型文件
+// 编译时嵌入 ViSQOL 模型文件（zstd 压缩）
 // 音频模式使用的 SVM 模型
-const VISQOL_AUDIO_MODEL: &[u8] = include_bytes!("../bin/model/libsvm_nu_svr_model.txt");
+const VISQOL_AUDIO_MODEL_COMPRESSED: &[u8] = include_bytes!("../bin_compressed/libsvm_nu_svr_model.txt.zst");
+const VISQOL_AUDIO_MODEL_ORIGINAL_SIZE: usize = 138441;
 // 语音模式使用的 TFLite 模型
-const VISQOL_SPEECH_MODEL: &[u8] = include_bytes!("../bin/model/lattice_tcditugenmeetpackhref_ls2_nl60_lr12_bs2048_learn.005_ep2400_train1_7_raw.tflite");
+const VISQOL_SPEECH_MODEL_COMPRESSED: &[u8] = include_bytes!("../bin_compressed/lattice_tcditugenmeetpackhref_ls2_nl60_lr12_bs2048_learn.005_ep2400_train1_7_raw.tflite.zst");
+const VISQOL_SPEECH_MODEL_ORIGINAL_SIZE: usize = 2233840;
 
 /// 嵌入的 visqol 二进制的唯一标识（用于判断是否需要重新释放）
 const VISQOL_BIN_HASH: &str = env!("VISQOL_BIN_HASH");
@@ -51,42 +58,71 @@ pub struct PatchSimilarityResult {
     pub deg_patch_end_time: f64,
 }
 
-/// 释放嵌入文件到临时目录
+/// 释放嵌入的压缩文件到临时目录（zstd 解压）
 ///
-/// 使用 hash 文件判断是否需要重新释放，避免每次运行都写磁盘
-fn extract_file(data: &[u8], filename: &str, hash: &str, temp_dir: &Path) -> Result<PathBuf, String> {
+/// 使用 hash 文件判断是否需要重新解压，避免每次运行都解压
+fn extract_compressed_file(
+    compressed_data: &[u8],
+    original_size: usize,
+    filename: &str,
+    hash: &str,
+    temp_dir: &Path,
+) -> Result<PathBuf, String> {
     let file_path = temp_dir.join(filename);
     let hash_path = temp_dir.join(format!("{}.hash", filename));
 
-    let need_extract = if file_path.exists() && hash_path.exists() {
+    let need_decompress = if file_path.exists() && hash_path.exists() {
         let existing_hash = fs::read_to_string(&hash_path).unwrap_or_default();
         existing_hash != hash
     } else {
         true
     };
 
-    if need_extract {
-        fs::write(&file_path, data)
-            .map_err(|e| format!("释放文件 {} 失败: {}", filename, e))?;
+    if need_decompress {
+        // 确保目录存在
+        if !temp_dir.exists() {
+            fs::create_dir_all(temp_dir)
+                .map_err(|e| format!("创建临时目录失败: {}", e))?;
+        }
+
+        // 解压数据
+        let decompressed = decompress::decompress_zstd(compressed_data)
+            .map_err(|e| format!("解压 {} 失败: {}", filename, e))?;
+
+        // 验证大小
+        if decompressed.len() != original_size {
+            return Err(format!(
+                "{} 大小不匹配: 期望 {} 字节, 实际 {} 字节",
+                filename, original_size, decompressed.len()
+            ));
+        }
+
+        // 写入文件
+        fs::write(&file_path, &decompressed)
+            .map_err(|e| format!("写入 {} 失败: {}", filename, e))?;
         fs::write(&hash_path, hash)
-            .map_err(|e| format!("写入 hash 文件失败: {}", e))?;
+            .map_err(|e| format!("写入 hash 失败: {}", e))?;
     }
 
     Ok(file_path)
 }
 
-/// 释放嵌入的 visqol 二进制到临时目录
+/// 释放嵌入的 visqol 二进制到临时目录（zstd 解压）
 fn extract_visqol() -> Result<PathBuf, String> {
     let temp_dir = std::env::temp_dir().join("audiobench");
-    fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("创建临时目录失败: {}", e))?;
 
     #[cfg(target_os = "windows")]
     let exe_name = "visqol.exe";
     #[cfg(not(target_os = "windows"))]
     let exe_name = "visqol";
 
-    let exe_path = extract_file(VISQOL_BIN, exe_name, VISQOL_BIN_HASH, &temp_dir)?;
+    let exe_path = extract_compressed_file(
+        VISQOL_BIN_COMPRESSED,
+        VISQOL_BIN_ORIGINAL_SIZE,
+        exe_name,
+        VISQOL_BIN_HASH,
+        &temp_dir,
+    )?;
 
     // Linux/macOS 需要设置可执行权限
     #[cfg(unix)]
@@ -103,21 +139,21 @@ fn extract_visqol() -> Result<PathBuf, String> {
     Ok(exe_path)
 }
 
-/// 释放 ViSQOL 模型文件到临时目录
+/// 释放 ViSQOL 模型文件到临时目录（zstd 解压）
 fn extract_models() -> Result<(PathBuf, PathBuf), String> {
     let temp_dir = std::env::temp_dir().join("audiobench");
-    fs::create_dir_all(&temp_dir)
-        .map_err(|e| format!("创建临时目录失败: {}", e))?;
 
-    let audio_model_path = extract_file(
-        VISQOL_AUDIO_MODEL,
+    let audio_model_path = extract_compressed_file(
+        VISQOL_AUDIO_MODEL_COMPRESSED,
+        VISQOL_AUDIO_MODEL_ORIGINAL_SIZE,
         "libsvm_nu_svr_model.txt",
         VISQOL_AUDIO_MODEL_HASH,
         &temp_dir,
     )?;
 
-    let speech_model_path = extract_file(
-        VISQOL_SPEECH_MODEL,
+    let speech_model_path = extract_compressed_file(
+        VISQOL_SPEECH_MODEL_COMPRESSED,
+        VISQOL_SPEECH_MODEL_ORIGINAL_SIZE,
         "lattice_tcditugenmeetpackhref_ls2_nl60_lr12_bs2048_learn.005_ep2400_train1_7_raw.tflite",
         VISQOL_SPEECH_MODEL_HASH,
         &temp_dir,

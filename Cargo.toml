@@ -10,6 +10,7 @@ hound = "3.5"
 rustfft = "6.4.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+zstd = "0.13"
 
 # DNSMOS ONNX 推理 - 仅 Windows 启用完整功能
 [target.'cfg(windows)'.dependencies]
@@ -20,3 +21,5 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_
 opt-level = "s"
 lto = true
 strip = true
+panic = "abort"
+codegen-units = 1

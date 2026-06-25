@@ -1,7 +1,7 @@
 //! AudioBench - 音频质量评估工具
 //!
 //! 集成官方 ViSQOL 进行音频质量评估，单 EXE 运行。
-//! 编译时嵌入 visqol 二进制，运行时自动释放到临时目录。
+//! 编译时嵌入（压缩的）visqol 二进制，运行时自动解压释放到临时目录。
 //! 使用方法:
 //!   audio_bench --reference ref.wav --recorded rec.wav
 
@@ -13,6 +13,7 @@ mod report;
 mod html_report;
 mod time_warping;
 mod dnsmos;
+mod decompress;  // 通用解压模块（zstd）
 
 use clap::Parser;
 use std::fs;
@@ -134,10 +135,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("录制音频文件不存在: {:?}", args.recorded).into());
     }
 
-    // 加载 DNSMOS 模型（仅在需要时加载，可优化为延迟加载）
+    // 加载 DNSMOS 模型（使用内部压缩数据，运行时自动解压）
     println!("[*] 加载 DNSMOS 模型...");
-    const DNSMOS_MODEL: &[u8] = include_bytes!("../bin/model/sig_bak_ovr.onnx");
-    let mut dnsmos_evaluator = dnsmos::DnsMosEvaluator::new(DNSMOS_MODEL)
+    let mut dnsmos_evaluator = dnsmos::DnsMosEvaluator::new(&[])
         .map_err(|e| format!("DNSMOS 模型加载失败: {}", e))?;
     println!("      DNSMOS 模型加载成功");
 

@@ -11,9 +11,10 @@
 //! - 输出：多项式校准后的 SIG/BAK/OVRL 分数
 //!
 //! 部署方案 - 仅 Windows：
-//! - ONNX Runtime DLL 编译时嵌入 EXE，运行时释放到临时目录，单 EXE 部署
+//! - ONNX Runtime DLL 编译时嵌入（压缩），运行时解压释放到临时目录，单 EXE 部署
 
 use std::error::Error;
+use crate::decompress;
 
 // ============================================================================
 // Windows 完整实现
@@ -24,36 +25,47 @@ mod windows_impl {
     use std::error::Error;
     use std::fs;
     use std::path::PathBuf;
+    use crate::decompress;
 
-    /// ONNX Runtime DLL（编译时嵌入，运行时释放到临时目录）
-    pub const ONNXRUNTIME_DLL: &[u8] = include_bytes!("../bin/onnxruntime.dll");
-    pub const ONNXRUNTIME_PROVIDERS_DLL: &[u8] = include_bytes!("../bin/onnxruntime_providers_shared.dll");
+    /// ONNX Runtime DLL（编译时嵌入，zstd 压缩，运行时解压到临时目录）
+    pub const ONNXRUNTIME_DLL_COMPRESSED: &[u8] = include_bytes!("../bin_compressed/onnxruntime.dll.zst");
+    pub const ONNXRUNTIME_DLL_ORIGINAL_SIZE: usize = 14897976;
+    pub const ONNXRUNTIME_DLL_HASH: &str = env!("ONNXRUNTIME_DLL_HASH");
+
+    pub const ONNXRUNTIME_PROVIDERS_DLL_COMPRESSED: &[u8] = include_bytes!("../bin_compressed/onnxruntime_providers_shared.dll.zst");
+    pub const ONNXRUNTIME_PROVIDERS_DLL_ORIGINAL_SIZE: usize = 21816;
+    pub const ONNXRUNTIME_PROVIDERS_DLL_HASH: &str = env!("ONNXRUNTIME_PROVIDERS_DLL_HASH");
 
     /// 获取临时目录路径
     pub fn get_dll_dir() -> PathBuf {
         std::env::temp_dir().join("audiobench_dnsmos")
     }
 
-    /// 初始化 DLL（首次调用时释放到临时目录）
+    /// 初始化 DLL（首次调用时解压到临时目录）
     pub fn init_dlls() {
         use std::sync::Once;
         static INIT: Once = Once::new();
 
         INIT.call_once(|| {
             let dll_dir = get_dll_dir();
-            if !dll_dir.exists() {
-                let _ = fs::create_dir_all(&dll_dir);
-            }
 
-            let dll_path = dll_dir.join("onnxruntime.dll");
-            if !dll_path.exists() {
-                let _ = fs::write(&dll_path, ONNXRUNTIME_DLL);
-            }
+            // 解压 onnxruntime.dll
+            let dll_path = decompress::extract_compressed_file(
+                ONNXRUNTIME_DLL_COMPRESSED,
+                ONNXRUNTIME_DLL_ORIGINAL_SIZE,
+                "onnxruntime.dll",
+                &dll_dir,
+                ONNXRUNTIME_DLL_HASH,
+            ).expect("解压 onnxruntime.dll 失败");
 
-            let providers_path = dll_dir.join("onnxruntime_providers_shared.dll");
-            if !providers_path.exists() {
-                let _ = fs::write(&providers_path, ONNXRUNTIME_PROVIDERS_DLL);
-            }
+            // 解压 onnxruntime_providers_shared.dll
+            let providers_path = decompress::extract_compressed_file(
+                ONNXRUNTIME_PROVIDERS_DLL_COMPRESSED,
+                ONNXRUNTIME_PROVIDERS_DLL_ORIGINAL_SIZE,
+                "onnxruntime_providers_shared.dll",
+                &dll_dir,
+                ONNXRUNTIME_PROVIDERS_DLL_HASH,
+            ).expect("解压 onnxruntime_providers_shared.dll 失败");
 
             // 设置 DLL 搜索路径
             {
@@ -68,7 +80,9 @@ mod windows_impl {
                 }
             }
 
-            eprintln!("[+] DNSMOS DLL 已释放到: {:?}", dll_dir);
+            eprintln!("[+] DNSMOS DLL 已解压到: {:?}", dll_dir);
+            eprintln!("    onnxruntime.dll: {:?}", dll_path);
+            eprintln!("    providers DLL: {:?}", providers_path);
         });
     }
 }
@@ -199,19 +213,34 @@ pub struct DnsMosEvaluator {
     session: ort::session::Session,
 }
 
-/// DNSMOS 模型字节
+/// DNSMOS 模型字节（zstd 压缩）
 #[cfg(target_os = "windows")]
-const DNSMOS_MODEL: &[u8] = include_bytes!("../bin/model/sig_bak_ovr.onnx");
+const DNSMOS_MODEL_COMPRESSED: &[u8] = include_bytes!("../bin_compressed/sig_bak_ovr.onnx.zst");
+#[cfg(target_os = "windows")]
+const DNSMOS_MODEL_ORIGINAL_SIZE: usize = 1157965;
 #[cfg(target_os = "windows")]
 const DNSMOS_MODEL_HASH: &str = env!("DNSMOS_MODEL_HASH");
 
 #[cfg(target_os = "windows")]
 impl DnsMosEvaluator {
-    pub fn new(_model_bytes: &[u8]) -> Result<Self, Box<dyn Error + Send + Sync>> {
+    /// 从压缩数据创建评估器（运行时解压）
+    pub fn from_compressed(compressed_data: &[u8]) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        // 解压 DNSMOS 模型
+        let model_data = decompress::decompress_fast(compressed_data)
+            .map_err(|e| format!("DNSMOS 模型解压失败: {}", e))?;
+
         windows_impl::init_dlls();
+
         let session = ort::session::Session::builder()?
-            .commit_from_memory(DNSMOS_MODEL)?;
+            .commit_from_memory(&model_data)?;
+
         Ok(Self { session })
+    }
+
+    /// 兼容旧接口（传入未使用的字节数组，保持 API 兼容）
+    pub fn new(_model_bytes: &[u8]) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        // 使用内部压缩的模型数据
+        Self::from_compressed(DNSMOS_MODEL_COMPRESSED)
     }
 
     pub fn evaluate(&mut self, samples: &[f64], sample_rate: u32) -> Result<DnsMosResult, Box<dyn Error + Send + Sync>> {
@@ -290,7 +319,7 @@ impl DnsMosEvaluator {
 
 #[cfg(target_os = "windows")]
 pub fn evaluate_audio(samples: &[f64], sample_rate: u32) -> Result<DnsMosResult, Box<dyn Error + Send + Sync>> {
-    let mut evaluator = DnsMosEvaluator::new(DNSMOS_MODEL)?;
+    let mut evaluator = DnsMosEvaluator::new(&[])?;  // 使用内部压缩数据
     evaluator.evaluate(samples, sample_rate)
 }
 
