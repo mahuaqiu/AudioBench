@@ -3,6 +3,76 @@
 
 use crate::report::EvaluationReport;
 
+/// 生成只包含 DNSMOS 指标的无参考 HTML 报告。
+pub fn generate_no_reference_html_report(report: &crate::report::NoReferenceReport) -> String {
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DNSMOS 无参考评估报告</title>
+<style>
+  :root {{ --bg:#f5f7fa; --card:#fff; --border:#e2e8f0; --text:#1a202c; --muted:#718096; --accent:#3182ce; }}
+  * {{ box-sizing:border-box; }}
+  body {{ margin:0; padding:32px 20px; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }}
+  .container {{ max-width:900px; margin:0 auto; }}
+  h1 {{ margin:0 0 6px; font-size:26px; }}
+  .subtitle {{ margin:0 0 24px; color:var(--muted); }}
+  .section {{ margin-bottom:20px; padding:20px; background:var(--card); border:1px solid var(--border); border-radius:8px; }}
+  .section-title {{ margin-bottom:16px; padding-bottom:8px; border-bottom:1px solid var(--border); font-size:16px; font-weight:600; }}
+  .info-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px 24px; font-size:14px; }}
+  .label {{ color:var(--muted); }}
+  .value {{ font-weight:500; word-break:break-word; }}
+  .cards {{ display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }}
+  .metric-label {{ color:var(--muted); font-size:14px; }}
+  .metric-value {{ margin-top:6px; color:var(--accent); font-size:36px; font-weight:700; }}
+  .hint {{ margin-top:6px; color:var(--muted); font-size:12px; }}
+  @media(max-width:640px) {{ .info-grid,.cards {{ grid-template-columns:1fr; }} }}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>DNSMOS 无参考评估报告</h1>
+<p class="subtitle">直接评估录制音频本身，不需要参考音频</p>
+<div class="section">
+<div class="section-title">基本信息</div>
+<div class="info-grid">
+<div><span class="label">录制音频：</span><span class="value">{recorded_path}</span></div>
+<div><span class="label">录制时长：</span><span class="value">{duration:.2}s</span></div>
+<div><span class="label">模型采样率：</span><span class="value">{sample_rate}Hz</span></div>
+<div><span class="label">参考音频：</span><span class="value">未提供</span></div>
+</div>
+</div>
+<div class="section">
+<div class="section-title">DNSMOS 结果</div>
+<div class="cards">
+<div><div class="metric-label">SIG 人声信号</div><div class="metric-value">{sig:.2}</div><div class="hint">人声清晰度与自然度，1-5 分</div></div>
+<div><div class="metric-label">BAK 背景噪声</div><div class="metric-value">{bak:.2}</div><div class="hint">背景噪声质量，1-5 分</div></div>
+<div><div class="metric-label">OVRL 整体质量</div><div class="metric-value">{ovrl:.2}</div><div class="hint">整体听感质量，1-5 分</div></div>
+</div>
+</div>
+</div>
+</body>
+</html>"##,
+        recorded_path = escape_html(&report.recorded_path),
+        duration = report.recorded_duration_s,
+        sample_rate = report.model_sample_rate,
+        sig = report.sig,
+        bak = report.bak,
+        ovrl = report.ovrl,
+    )
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
 /// 生成 HTML 报告
 pub fn generate_html_report(report: &EvaluationReport) -> String {
     // 将所有数据序列化为 JSON

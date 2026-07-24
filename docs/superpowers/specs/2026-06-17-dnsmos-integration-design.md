@@ -20,7 +20,15 @@
   - 指标说明中增加 DNSMOS 三个指标的详细描述
 - 控制台报告和 JSON 报告都输出 SIG、BAK、OVRL
 
-### 1.2 技术约束
+### 1.2 当前命令行行为
+
+- `--reference` 为可选参数。
+- 提供 `--reference` 时，执行原有的有参考 ViSQOL 对齐、分段评估，并在结果中附加 DNSMOS。
+- 省略 `--reference` 时，只对 `--recorded` 指定的音频执行整段 DNSMOS 评估，不执行 ViSQOL、对齐或参考异常检测。
+- 无参考模式的 JSON 和 HTML 使用独立的简化输出，只包含录制文件信息以及 SIG、BAK、OVRL，不输出空的有参考指标。
+- DNSMOS 始终使用 16kHz 模型；有参考模式中的 `--audio` 只控制 ViSQOL 的 48kHz 音频模式。
+
+### 1.3 技术约束
 
 - AudioBench 是 Rust 项目，需纯 Rust 实现（不使用 Python 依赖）
 - 统一使用 WB（Wideband，16kHz）模型：48kHz 音频重采样到 16kHz 后评分

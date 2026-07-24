@@ -5,6 +5,86 @@
 use serde::Serialize;
 use crate::metrics::{AudioAnomalyReport, LevelResult};
 use crate::visqol::VisqolResult as QualityResult;
+use crate::dnsmos::DnsMosResult;
+use std::path::Path;
+
+/// 无参考 DNSMOS 报告。
+///
+/// 无参考模式不创建 ViSQOL 的空字段，JSON 中只保留 DNSMOS 结果。
+#[derive(Debug, Serialize)]
+pub struct NoReferenceReport {
+    pub mode: &'static str,
+    pub recorded_path: String,
+    pub recorded_duration_s: f64,
+    pub model_sample_rate: u32,
+    pub sig: f64,
+    pub bak: f64,
+    pub ovrl: f64,
+}
+
+/// 生成无参考 DNSMOS 报告。
+pub fn generate_no_reference_report(
+    recorded_path: &Path,
+    recorded_duration_s: f64,
+    model_sample_rate: u32,
+    result: DnsMosResult,
+) -> NoReferenceReport {
+    NoReferenceReport {
+        mode: "no_reference",
+        recorded_path: recorded_path.to_string_lossy().to_string(),
+        recorded_duration_s,
+        model_sample_rate,
+        sig: result.sig,
+        bak: result.bak,
+        ovrl: result.ovrl,
+    }
+}
+
+/// 输出无参考 DNSMOS 控制台报告。
+pub fn print_no_reference_console_report(report: &NoReferenceReport) {
+    println!("\n{}", "=".repeat(60));
+    println!("                    DNSMOS 无参考评估报告");
+    println!("{}", "=".repeat(60));
+    println!("\n【基本信息】");
+    println!("  录制音频: {}", report.recorded_path);
+    println!("  录制时长: {:.2}s", report.recorded_duration_s);
+    println!("  模型采样率: {} Hz", report.model_sample_rate);
+    println!("  参考音频: 未提供（无参考评估）");
+    println!("\n【DNSMOS】");
+    println!("  SIG（人声信号）: {:.2}", report.sig);
+    println!("  BAK（背景噪声）: {:.2}", report.bak);
+    println!("  OVRL（整体质量）: {:.2}", report.ovrl);
+    println!("\n说明：DNSMOS 直接评估录制音频本身，不需要参考音频。分数范围为 1-5，越高越好。");
+    println!("{}", "=".repeat(60));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 无参考报告只序列化_dnsmos_字段() {
+        let report = generate_no_reference_report(
+            Path::new("recorded.wav"),
+            12.5,
+            16000,
+            DnsMosResult {
+                sig: 3.1,
+                bak: 4.2,
+                ovrl: 3.7,
+            },
+        );
+        let value = serde_json::to_value(report).expect("无参考报告应可序列化");
+
+        assert_eq!(value["mode"], "no_reference");
+        assert_eq!(value["sig"], 3.1);
+        assert_eq!(value["bak"], 4.2);
+        assert_eq!(value["ovrl"], 3.7);
+        assert!(value.get("reference_path").is_none());
+        assert!(value.get("moslqo_mean").is_none());
+        assert!(value.get("vnsim_mean").is_none());
+    }
+}
 
 
 /// 评估配置信息

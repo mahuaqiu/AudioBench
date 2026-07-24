@@ -111,7 +111,7 @@ mod tests {
         let original = b"Hello, AudioBench! This is a test message for zstd compression.";
 
         // 压缩
-        let compressed = zstd::encode_all(original, 3).unwrap();
+        let compressed = zstd::encode_all(&original[..], 3).unwrap();
 
         // 解压
         let decompressed = decompress_zstd(&compressed).unwrap();

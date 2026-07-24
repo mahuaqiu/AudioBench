@@ -3,6 +3,7 @@
 //! 集成官方 ViSQOL 进行音频质量评估，单 EXE 运行。
 //! 编译时嵌入（压缩的）visqol 二进制，运行时自动解压释放到临时目录。
 //! 使用方法:
+//!   audio_bench --recorded rec.wav
 //!   audio_bench --reference ref.wav --recorded rec.wav
 
 mod alignment_v3;
@@ -22,9 +23,9 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[clap(name = "audio_bench", version = "0.1.0", about = "音频质量评估工具")]
 struct Args {
-    /// 参考音频文件路径（WAV 格式）
-    #[clap(long = "reference", short = 'r', required = true)]
-    reference: PathBuf,
+    /// 参考音频文件路径（WAV 格式，可选；省略时执行 DNSMOS 无参考评估）
+    #[clap(long = "reference", short = 'r')]
+    reference: Option<PathBuf>,
 
     /// 录制音频文件路径（WAV 格式）
     #[clap(long = "recorded", short = 'c', required = true)]
@@ -128,11 +129,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     // 参数校验
-    if !args.reference.exists() {
-        return Err(format!("参考音频文件不存在: {:?}", args.reference).into());
-    }
     if !args.recorded.exists() {
         return Err(format!("录制音频文件不存在: {:?}", args.recorded).into());
+    }
+    if let Some(reference) = &args.reference {
+        if !reference.exists() {
+            return Err(format!("参考音频文件不存在: {:?}", reference).into());
+        }
     }
 
     // 加载 DNSMOS 模型（使用内部压缩数据，运行时自动解压）
@@ -141,15 +144,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("DNSMOS 模型加载失败: {}", e))?;
     println!("      DNSMOS 模型加载成功");
 
-    println!("[*] 加载参考音频: {:?}", args.reference);
-    let ref_audio = audio_io::AudioData::from_wav(&args.reference)?;
-    println!("      原始采样率: {}, 时长: {:.2}s", 
-             ref_audio.sample_rate, ref_audio.duration_secs());
-    
     println!("[*] 加载录制音频: {:?}", args.recorded);
     let rec_audio = audio_io::AudioData::from_wav(&args.recorded)?;
-    println!("      原始采样率: {}, 时长: {:.2}s", 
+    println!("      原始采样率: {}, 时长: {:.2}s",
              rec_audio.sample_rate, rec_audio.duration_secs());
+
+    // 没有参考文件时，只执行 DNSMOS 无参考评估，不进入对齐和 ViSQOL 流程。
+    if args.reference.is_none() {
+        println!("[*] 未提供参考音频，执行 DNSMOS 无参考评估...");
+        let dnsmos_result = dnsmos_evaluator
+            .evaluate(&rec_audio.samples, rec_audio.sample_rate)
+            .map_err(|e| format!("DNSMOS 评估失败: {}", e))?;
+        let report = report::generate_no_reference_report(
+            &args.recorded,
+            rec_audio.duration_secs(),
+            16000,
+            dnsmos_result,
+        );
+        report::print_no_reference_console_report(&report);
+
+        if let Some(output_path) = &args.output {
+            let json = serde_json::to_string_pretty(&report)
+                .map_err(|e| format!("JSON 序列化失败: {}", e))?;
+            fs::write(output_path, json)?;
+            println!("\n[+] JSON 报告已保存: {:?}", output_path);
+        }
+
+        if let Some(html_path) = &args.html {
+            let html = html_report::generate_no_reference_html_report(&report);
+            fs::write(html_path, html)?;
+            println!("\n[+] HTML 报告已保存: {:?}", html_path);
+        }
+        return Ok(());
+    }
+
+    let reference_path = args.reference.as_ref().expect("已通过无参考分支校验");
+    println!("[*] 加载参考音频: {:?}", reference_path);
+    let ref_audio = audio_io::AudioData::from_wav(reference_path)?;
+    println!("      原始采样率: {}, 时长: {:.2}s",
+             ref_audio.sample_rate, ref_audio.duration_secs());
 
     // 自动选择 ViSQOL 模式并重采样
     let target_rate = if args.audio { 48000 } else { 16000 };
@@ -165,7 +198,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             (s.iter().map(|&x| x * x).sum::<f64>() / s.len() as f64).sqrt()
         }
         fn peak(s: &[f64]) -> f64 { s.iter().map(|&x| x.abs()).fold(0.0f64, f64::max) }
-        let r = audio_io::AudioData::from_wav(&args.reference)?;
+        let r = audio_io::AudioData::from_wav(reference_path)?;
         println!("[DIAG][处理损伤] 参考 原始采样率={}Hz, 样本数={}, 峰值={:.5}, RMS={:.5}",
                  r.sample_rate, r.samples.len(), peak(&r.samples), rms(&r.samples));
     }
@@ -462,7 +495,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 生成报告
     let report = report::generate_report(
         report::ReportConfig {
-            reference_path: args.reference.to_string_lossy().to_string(),
+            reference_path: reference_path.to_string_lossy().to_string(),
             recorded_path: args.recorded.to_string_lossy().to_string(),
             target_sample_rate: ref_audio.sample_rate,
         },

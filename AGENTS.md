@@ -3,7 +3,7 @@
 ## 项目简介
 
 AudioBench 是音频质量评估命令行工具，纯 Rust 实现，单 EXE 运行，无需外部依赖。
-核心功能：将参考音频与录制音频对齐、分段评估，输出 ViSQOL 兼容的音质指标。
+核心功能：在提供参考音频时将参考音频与录制音频对齐、分段评估，输出 ViSQOL 兼容的音质指标；省略参考音频时直接执行 DNSMOS 无参考评估。
 
 ## 项目结构
 
@@ -24,11 +24,12 @@ src/
 ```bash
 cargo check              # 编译检查
 cargo build --release    # 发布构建（~1.5MB，LTO + strip）
-audio_bench --reference ref.wav --recorded rec.wav --speech
+audio_bench --reference ref.wav --recorded rec.wav
+audio_bench --recorded rec.wav
 audio_bench -r ref.wav -c rec.wav -o report.json
 ```
 
-关键参数：`--speech` 语音模式 (16kHz)；`--sample-rate` 自定义采样率；`--output` 输出 JSON。
+关键参数：`--audio` 有参考音频模式 (48kHz，默认语音模式为 16kHz)；省略 `--reference` 执行 DNSMOS 无参考评估；`--output` 输出 JSON。
 
 ## 核心算法
 
@@ -37,8 +38,9 @@ audio_bench -r ref.wav -c rec.wav -o report.json
 - **帧参数**：80ms 帧长，75% 重叠，与 ViSQOL 一致
 - **预处理**：SPL 归一化 → dB 转换 → 噪声门限
 - **分段评估**：录制音频长于参考音频时，按参考长度循环分段，每段独立评分并汇总
+- **无参考评估**：没有参考文件时，整段录制音频直接输出 DNSMOS 的 SIG、BAK、OVRL
 
-输出指标：MOS-LQO（映射后 MOS）、VNSIM（全局 NSIM）、fVNSIM（各频段 NSIM）、fVDegEnergy（各频段降质能量比）、fstdnsim（NSIM 标准差）、SNR、异常检测（时域中断/漂移/频谱损伤）。
+有参考输出指标：MOS-LQO（映射后 MOS）、VNSIM（全局 NSIM）、fVNSIM（各频段 NSIM）、fVDegEnergy（各频段降质能量比）、fstdnsim（NSIM 标准差）、异常检测（时域中断/漂移/频谱损伤）。无参考时只输出 DNSMOS：SIG（人声信号）、BAK（背景噪声）、OVRL（整体质量）。
 
 ## 编码规范
 
